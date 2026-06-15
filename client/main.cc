@@ -1,6 +1,7 @@
 #include "client/ChatClient.h"
 
 #include "common/Config.h"
+#include "common/Protocol.h"
 
 #include "muduo/base/CurrentThread.h"
 #include "muduo/base/Logging.h"
@@ -32,7 +33,7 @@ int main()
     return 1;
   }
 
-  std::cout << "Type messages and press Enter. Type /quit to exit."
+  std::cout << "Type Stage 1 commands and press Enter. Type /quit to exit."
             << std::endl;
 
   std::string line;
@@ -42,7 +43,14 @@ int main()
     {
       break;
     }
-    client.write(line + "\n");
+    std::string request;
+    std::string error;
+    if (!chatservice::buildRequestFromCommand(line, &request, &error))
+    {
+      std::cout << "client: " << error << std::endl;
+      continue;
+    }
+    client.write(request);
   }
 
   client.disconnect();

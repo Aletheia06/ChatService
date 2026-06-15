@@ -105,11 +105,21 @@ void ChatClient::onMessage(const muduo::net::TcpConnectionPtr&,
                            muduo::net::Buffer* buffer,
                            muduo::Timestamp)
 {
-  muduo::string message = buffer->retrieveAllAsString();
-  std::cout << "server: " << message;
-  if (message.empty() || message[message.size() - 1] != '\n')
+  while (true)
   {
-    std::cout << std::endl;
+    const char* eol = buffer->findEOL();
+    if (eol == NULL)
+    {
+      break;
+    }
+
+    muduo::string message(buffer->peek(), eol);
+    buffer->retrieveUntil(eol + 1);
+    if (!message.empty() && message[message.size() - 1] == '\r')
+    {
+      message.resize(message.size() - 1);
+    }
+    std::cout << "server: " << message << std::endl;
   }
 }
 

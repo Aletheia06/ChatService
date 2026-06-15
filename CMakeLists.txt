@@ -15,14 +15,20 @@ option(CHATSERVICE_BUILD_TESTS "Build ChatService tests" ON)
 
 add_subdirectory(muduo)
 
-add_library(chat_common INTERFACE)
-target_include_directories(chat_common INTERFACE
+add_library(chat_common
+  common/Json.cc
+  common/Protocol.cc
+)
+target_include_directories(chat_common PUBLIC
   ${PROJECT_SOURCE_DIR}
   ${PROJECT_SOURCE_DIR}/muduo
 )
 
 add_executable(chat_server
-  server/EchoServer.cc
+  server/ChatServer.cc
+  server/ChatSession.cc
+  server/RoomManager.cc
+  server/UserManager.cc
   server/main.cc
 )
 target_link_libraries(chat_server PRIVATE chat_common muduo_net)

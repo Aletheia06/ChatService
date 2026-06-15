@@ -1,4 +1,4 @@
-#include "server/EchoServer.h"
+#include "server/ChatServer.h"
 
 #include "common/Config.h"
 
@@ -11,7 +11,7 @@ int main()
   muduo::net::EventLoop loop;
   muduo::net::InetAddress listenAddr(chatservice::kServerHost,
                                      chatservice::kServerPort);
-  chatservice::EchoServer server(&loop, listenAddr);
+  chatservice::ChatServer server(&loop, listenAddr);
 
   LOG_INFO << "chat_server listening on "
            << chatservice::kServerHost << ":"
