@@ -10,6 +10,7 @@ namespace chatservice
 {
 
 bool isValidName(const std::string& name);
+int64_t currentTimeMicros();
 std::string trimCopy(const std::string& value);
 std::string joinList(const std::vector<std::string>& values);
 

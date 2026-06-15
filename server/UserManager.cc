@@ -51,6 +51,34 @@ muduo::net::TcpConnectionPtr UserManager::find(
   return it->second;
 }
 
+std::vector<muduo::net::TcpConnectionPtr> UserManager::findMany(
+    const std::vector<std::string>& usernames) const
+{
+  std::vector<muduo::net::TcpConnectionPtr> connections;
+  connections.reserve(usernames.size());
+
+  muduo::MutexLockGuard lock(mutex_);
+  for (std::vector<std::string>::const_iterator it = usernames.begin();
+       it != usernames.end();
+       ++it)
+  {
+    const std::map<std::string, muduo::net::TcpConnectionPtr>::const_iterator
+        userIt = users_.find(*it);
+    if (userIt != users_.end())
+    {
+      connections.push_back(userIt->second);
+    }
+  }
+
+  return connections;
+}
+
+int64_t UserManager::onlineCount() const
+{
+  muduo::MutexLockGuard lock(mutex_);
+  return static_cast<int64_t>(users_.size());
+}
+
 std::vector<std::string> UserManager::onlineUsers() const
 {
   std::vector<std::string> users;

@@ -28,6 +28,7 @@ add_executable(chat_server
   server/ChatServer.cc
   server/ChatSession.cc
   server/RoomManager.cc
+  server/ServerMetrics.cc
   server/UserManager.cc
   server/main.cc
 )

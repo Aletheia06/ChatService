@@ -28,6 +28,7 @@ muduo/patches/
 *.dylib
 *.exe
 *.pdb
+chatservice.*.log
 
 # Editor and OS files
 .idea/

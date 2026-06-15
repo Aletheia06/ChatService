@@ -3,12 +3,11 @@
 
 #include "server/ChatSession.h"
 #include "server/RoomManager.h"
+#include "server/ServerMetrics.h"
 #include "server/UserManager.h"
 
-#include "muduo/base/Mutex.h"
 #include "muduo/net/TcpServer.h"
 
-#include <map>
 #include <string>
 
 namespace chatservice
@@ -42,14 +41,16 @@ class ChatServer
                  muduo::Timestamp receiveTime);
 
   ChatSessionPtr findSession(const muduo::net::TcpConnectionPtr& connection);
-  void removeSession(const muduo::net::TcpConnectionPtr& connection);
   bool requireLoggedIn(const ChatSessionPtr& session, std::string* username);
+  int64_t requestLatencyMicros(const JsonObject& request,
+                               muduo::Timestamp receiveTime) const;
+  void printPerformanceStats();
 
+  muduo::net::EventLoop* loop_;
   muduo::net::TcpServer server_;
   UserManager userManager_;
   RoomManager roomManager_;
-  mutable muduo::MutexLock mutex_;
-  std::map<std::string, ChatSessionPtr> sessions_ GUARDED_BY(mutex_);
+  ServerMetrics metrics_;
 };
 
 }  // namespace chatservice

@@ -5,6 +5,7 @@
 #include "muduo/net/TcpConnection.h"
 
 #include <map>
+#include <stdint.h>
 #include <string>
 #include <vector>
 
@@ -20,6 +21,9 @@ class UserManager
   void logout(const std::string& username,
               const muduo::net::TcpConnectionPtr& connection);
   muduo::net::TcpConnectionPtr find(const std::string& username) const;
+  std::vector<muduo::net::TcpConnectionPtr> findMany(
+      const std::vector<std::string>& usernames) const;
+  int64_t onlineCount() const;
   std::vector<std::string> onlineUsers() const;
 
  private:

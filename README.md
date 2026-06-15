@@ -1,16 +1,19 @@
 # ChatService
 
-Stage 1 is a muduo-based TCP chat skeleton with user login, private messages, and chat rooms. The server and client speak a simple line-delimited JSON protocol: each TCP message is one JSON object followed by `\n`.
+Stage 2 is a muduo-based TCP chat system optimized for higher concurrency. It keeps the Stage 1 user, private-message, and room features, then adds a muduo worker thread pool, multiple `EventLoop` instances, lower-lock routing, asynchronous logging, and periodic performance statistics.
+
+The server and client speak a simple line-delimited JSON protocol: each TCP message is one JSON object followed by `\n`.
 
 ## Architecture
 
-- `server/ChatServer.*` integrates muduo `EventLoop` and `TcpServer`, owns connection lifecycle, and routes requests.
+- `server/ChatServer.*` integrates muduo `EventLoop` and `TcpServer`, configures the worker event-loop pool, owns connection lifecycle, and routes requests.
 - `server/ChatSession.*` stores per-connection state, including the logged-in username.
-- `server/UserManager.*` maintains the thread-safe online user map and enforces unique usernames.
-- `server/RoomManager.*` maintains thread-safe room membership.
+- `server/UserManager.*` maintains the thread-safe online user map and supports one-lock connection snapshots for broadcasts.
+- `server/RoomManager.*` maintains thread-safe room membership and returns member-name snapshots.
+- `server/ServerMetrics.*` records online users, message rate, average latency, total connections, and dropped connections.
 - `client/` contains the muduo `TcpClient` wrapper and an interactive command-line client.
 - `common/Json.*` implements the small JSON object parser and serializer used by the wire protocol.
-- `common/Protocol.*` translates CLI commands into JSON requests and provides shared protocol helpers.
+- `common/Protocol.*` translates CLI commands into JSON requests and attaches client send timestamps for latency measurement.
 - `tests/` contains focused CTest checks for configuration and protocol behavior.
 
 The server listens on `127.0.0.1:8888`. Multiple clients can connect at the same time. A client must login before private chat or room operations.
@@ -38,6 +41,8 @@ ChatService/
 |   |-- ChatSession.h
 |   |-- RoomManager.cc
 |   |-- RoomManager.h
+|   |-- ServerMetrics.cc
+|   |-- ServerMetrics.h
 |   |-- UserManager.cc
 |   |-- UserManager.h
 |   `-- main.cc
@@ -85,6 +90,8 @@ Create and use rooms:
 {"type":"room_msg","room":"lobby","message":"hello everyone"}
 ```
 
+The command-line client adds a `sent_at_us` field to generated JSON requests. The server uses it for end-to-end latency. Raw JSON clients may also include that field.
+
 Server responses use JSON too:
 
 ```json
@@ -111,14 +118,68 @@ ROOM_MSG room_name message
 
 You can also paste a raw JSON request that follows the protocol.
 
+## High-Concurrency Design
+
+The server calls `TcpServer::setThreadNum(kWorkerThreadCount)` with `kWorkerThreadCount = 4`. muduo accepts connections on the base loop and distributes established connections across worker `EventLoop` threads, so socket reads and writes do not all run on one loop.
+
+The main shared state is intentionally narrow:
+
+- User lookup is protected by one mutex inside `UserManager`.
+- Room membership is protected by one mutex inside `RoomManager`.
+- Per-connection `ChatSession` lookup uses muduo connection context instead of a global session map on the message hot path.
+- Broadcasts first take short snapshots, then release locks before sending.
+- Room broadcast serializes the JSON event once and reuses the same string for every recipient.
+
+This keeps lock hold time bounded by map/set lookup and snapshot creation. Network sends happen after locks are released, which avoids blocking user and room state behind slow clients.
+
+## Metrics And Benchmark Output
+
+The server records:
+
+- `online_users`
+- `messages_per_second`
+- `average_latency_us`
+- `total_messages`
+- `total_connections`
+- `dropped_connections`
+
+Every `kMetricsIntervalSeconds` seconds, the server prints and logs a benchmark line:
+
+```text
+stats online_users=2 messages_per_second=128.4 average_latency_us=731.2 total_messages=642 total_connections=10 dropped_connections=8
+```
+
+`messages_per_second` and `average_latency_us` are interval-based. `total_messages`, `total_connections`, and `dropped_connections` are cumulative. If a request has `sent_at_us`, latency is measured from client send time to server handling time. Otherwise, the server falls back to muduo receive time.
+
+## Asynchronous Logging
+
+`server/main.cc` installs muduo `AsyncLogging` through `muduo::Logger::setOutput`. Server logs are written by a background logging thread into files named like:
+
+```text
+chatservice.YYYYMMDD-HHMMSS.hostname.pid.log
+```
+
+This keeps request-handling event loops from doing synchronous log file writes on the hot path.
+
+## Bottleneck Analysis
+
+The Stage 1 server could bottleneck in four places:
+
+- A single I/O loop would serialize all client socket activity.
+- A global session map lookup on every message would add avoidable locking.
+- Room broadcast could repeatedly lock user state for each member.
+- Synchronous logging could turn disk I/O into request latency.
+
+Stage 2 addresses those points with muduo worker loops, connection-context session lookup, one-lock recipient snapshots, reusable serialized broadcast payloads, atomic metrics counters, and asynchronous logging. The remaining likely bottlenecks are JSON parsing cost, large room fan-out, and slow client output buffers. Those are acceptable for this stage because the protocol is still intentionally simple and the broadcast path no longer holds shared-state locks while sending.
+
 ## Build
 
 This muduo tree is Linux-oriented, so build this project on Linux or WSL.
 
 ```sh
-cmake -S . -B build-stage1 -DCMAKE_BUILD_TYPE=Debug
-cmake --build build-stage1
-ctest --test-dir build-stage1 --output-on-failure
+cmake -S . -B build-stage2 -DCMAKE_BUILD_TYPE=Debug
+cmake --build build-stage2
+ctest --test-dir build-stage2 --output-on-failure
 ```
 
 ## Run
@@ -126,13 +187,13 @@ ctest --test-dir build-stage1 --output-on-failure
 Start the server in one terminal:
 
 ```sh
-./build-stage1/bin/chat_server
+./build-stage2/bin/chat_server
 ```
 
 Start one or more clients in other terminals:
 
 ```sh
-./build-stage1/bin/chat_client
+./build-stage2/bin/chat_client
 ```
 
 Example session:

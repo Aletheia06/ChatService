@@ -33,7 +33,7 @@ int main()
     return 1;
   }
 
-  std::cout << "Type Stage 1 commands and press Enter. Type /quit to exit."
+  std::cout << "Type Stage 2 commands and press Enter. Type /quit to exit."
             << std::endl;
 
   std::string line;

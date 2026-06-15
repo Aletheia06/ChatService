@@ -1,5 +1,6 @@
 #include "common/Protocol.h"
 
+#include <chrono>
 #include <cctype>
 #include <sstream>
 
@@ -65,7 +66,11 @@ std::string restOfLine(const std::string& value, std::size_t pos)
 
 bool finishObject(const JsonObject& object, std::string* jsonLine)
 {
-  *jsonLine = makeJsonLine(object);
+  JsonObject timedObject = object;
+  std::ostringstream stream;
+  stream << currentTimeMicros();
+  timedObject["sent_at_us"] = stream.str();
+  *jsonLine = makeJsonLine(timedObject);
   return true;
 }
 
@@ -88,6 +93,13 @@ bool isValidName(const std::string& name)
   }
 
   return true;
+}
+
+int64_t currentTimeMicros()
+{
+  const std::chrono::system_clock::duration now =
+      std::chrono::system_clock::now().time_since_epoch();
+  return std::chrono::duration_cast<std::chrono::microseconds>(now).count();
 }
 
 std::string trimCopy(const std::string& value)

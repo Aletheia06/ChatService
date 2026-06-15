@@ -4,10 +4,17 @@
 #include "common/Protocol.h"
 
 #include "muduo/base/Logging.h"
+#include "muduo/base/Timestamp.h"
 #include "muduo/net/Buffer.h"
+#include "muduo/net/EventLoop.h"
 #include "muduo/net/InetAddress.h"
 
+#include <boost/any.hpp>
+
+#include <cstdlib>
 #include <functional>
+#include <stdio.h>
+#include <sstream>
 #include <vector>
 
 using std::placeholders::_1;
@@ -16,15 +23,38 @@ using std::placeholders::_3;
 
 namespace chatservice
 {
+namespace
+{
+
+ChatSessionPtr sessionFromConnection(
+    const muduo::net::TcpConnectionPtr& connection)
+{
+  const ChatSessionPtr* session =
+      boost::any_cast<ChatSessionPtr>(&connection->getContext());
+  if (session == NULL)
+  {
+    return ChatSessionPtr();
+  }
+  return *session;
+}
+
+}  // namespace
 
 ChatServer::ChatServer(muduo::net::EventLoop* loop,
                        const muduo::net::InetAddress& listenAddr)
-  : server_(loop, listenAddr, kServerName)
+  : loop_(loop),
+    server_(loop, listenAddr, kServerName),
+    userManager_(),
+    roomManager_(),
+    metrics_()
 {
+  server_.setThreadNum(kWorkerThreadCount);
   server_.setConnectionCallback(
       std::bind(&ChatServer::onConnection, this, _1));
   server_.setMessageCallback(
       std::bind(&ChatServer::onMessage, this, _1, _2, _3));
+  loop_->runEvery(kMetricsIntervalSeconds,
+                  std::bind(&ChatServer::printPerformanceStats, this));
 }
 
 void ChatServer::start()
@@ -202,14 +232,16 @@ void ChatServer::sendRoomMessage(const ChatSessionPtr& session,
   event["message"] = message;
 
   const std::string eventLine = makeJsonLine(event);
-  for (std::vector<std::string>::const_iterator it = members.begin();
-       it != members.end();
+  const std::vector<muduo::net::TcpConnectionPtr> connections =
+      userManager_.findMany(members);
+  for (std::vector<muduo::net::TcpConnectionPtr>::const_iterator it =
+           connections.begin();
+       it != connections.end();
        ++it)
   {
-    const muduo::net::TcpConnectionPtr connection = userManager_.find(*it);
-    if (connection)
+    if (*it)
     {
-      connection->send(eventLine);
+      (*it)->send(eventLine);
     }
   }
 }
@@ -222,11 +254,9 @@ void ChatServer::onConnection(const muduo::net::TcpConnectionPtr& connection)
 
   if (connection->connected())
   {
+    metrics_.recordConnectionOpened();
     ChatSessionPtr session(new ChatSession(this, connection));
-    {
-      muduo::MutexLockGuard lock(mutex_);
-      sessions_[connection->name()] = session;
-    }
+    connection->setContext(session);
     session->sendJson(makeOkResponse("connected"));
   }
   else
@@ -235,8 +265,9 @@ void ChatServer::onConnection(const muduo::net::TcpConnectionPtr& connection)
     if (session)
     {
       logout(session, false);
-      removeSession(connection);
     }
+    connection->setContext(boost::any());
+    metrics_.recordConnectionDropped();
   }
 }
 
@@ -279,28 +310,21 @@ void ChatServer::onMessage(const muduo::net::TcpConnectionPtr& connection,
 
     LOG_INFO << connection->name() << " request at "
              << receiveTime.toString();
+    metrics_.recordMessage(requestLatencyMicros(request, receiveTime));
     session->handleRequest(request);
+  }
+
+  if (buffer->readableBytes() > kMaxRequestLineBytes)
+  {
+    session->sendJson(makeErrorResponse("request line is too large"));
+    connection->forceClose();
   }
 }
 
 ChatSessionPtr ChatServer::findSession(
     const muduo::net::TcpConnectionPtr& connection)
 {
-  muduo::MutexLockGuard lock(mutex_);
-  const std::map<std::string, ChatSessionPtr>::const_iterator it =
-      sessions_.find(connection->name());
-  if (it == sessions_.end())
-  {
-    return ChatSessionPtr();
-  }
-  return it->second;
-}
-
-void ChatServer::removeSession(
-    const muduo::net::TcpConnectionPtr& connection)
-{
-  muduo::MutexLockGuard lock(mutex_);
-  sessions_.erase(connection->name());
+  return sessionFromConnection(connection);
 }
 
 bool ChatServer::requireLoggedIn(const ChatSessionPtr& session,
@@ -313,6 +337,46 @@ bool ChatServer::requireLoggedIn(const ChatSessionPtr& session,
     return false;
   }
   return true;
+}
+
+int64_t ChatServer::requestLatencyMicros(
+    const JsonObject& request,
+    muduo::Timestamp receiveTime) const
+{
+  const int64_t nowMicros = muduo::Timestamp::now().microSecondsSinceEpoch();
+  JsonObject::const_iterator it = request.find("sent_at_us");
+  if (it != request.end())
+  {
+    char* end = NULL;
+    const int64_t sentMicros = strtoll(it->second.c_str(), &end, 10);
+    if (end != it->second.c_str() && sentMicros > 0 &&
+        nowMicros >= sentMicros)
+    {
+      return nowMicros - sentMicros;
+    }
+  }
+
+  return nowMicros - receiveTime.microSecondsSinceEpoch();
+}
+
+void ChatServer::printPerformanceStats()
+{
+  const MetricsSnapshot snapshot =
+      metrics_.snapshotAndReset(userManager_.onlineCount(),
+                                kMetricsIntervalSeconds);
+
+  std::ostringstream stream;
+  stream << "stats online_users=" << snapshot.onlineUsers
+         << " messages_per_second=" << snapshot.messagesPerSecond
+         << " average_latency_us=" << snapshot.averageLatencyMicros
+         << " total_messages=" << snapshot.totalMessages
+         << " total_connections=" << snapshot.totalConnections
+         << " dropped_connections=" << snapshot.droppedConnections;
+
+  const std::string line = stream.str();
+  LOG_INFO << line;
+  printf("%s\n", line.c_str());
+  fflush(stdout);
 }
 
 }  // namespace chatservice

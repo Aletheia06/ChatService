@@ -50,7 +50,8 @@ int main()
   if (!chatservice::buildRequestFromCommand("LOGIN alice", &line, &error) ||
       !parseLine(line, &object) ||
       object["type"] != "login" ||
-      object["username"] != "alice")
+      object["username"] != "alice" ||
+      object["sent_at_us"].empty())
   {
     return 1;
   }

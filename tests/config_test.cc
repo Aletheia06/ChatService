@@ -14,5 +14,15 @@ int main()
     return 1;
   }
 
+  if (chatservice::kWorkerThreadCount < 1)
+  {
+    return 1;
+  }
+
+  if (chatservice::kMetricsIntervalSeconds <= 0.0)
+  {
+    return 1;
+  }
+
   return 0;
 }
