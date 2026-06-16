@@ -50,6 +50,8 @@ ChatService/
 |   |-- CMakeLists.txt
 |   |-- config_test.cc
 |   `-- protocol_test.cc
+|-- tools/
+|   `-- StressClient.cc
 `-- muduo/
 ```
 
@@ -180,6 +182,36 @@ This muduo tree is Linux-oriented, so build this project on Linux or WSL.
 cmake -S . -B build-stage2 -DCMAKE_BUILD_TYPE=Debug
 cmake --build build-stage2
 ctest --test-dir build-stage2 --output-on-failure
+```
+
+## Stress Test
+
+The stress tool is a C++ executable that uses `std::thread` and POSIX sockets. By default it starts 1000 concurrent clients. Each client connects, logs in as `stress_N`, and sends one self-addressed private message every second.
+
+```sh
+./build-stage2/bin/stress_client --clients 1000 --duration 60 --csv stress_results.csv
+```
+
+Useful options:
+
+```text
+--clients N
+--duration SECONDS
+--host HOST
+--port PORT
+--csv PATH
+```
+
+The CSV contains:
+
+```text
+clients,duration_seconds,elapsed_seconds,connection_attempts,successful_connections,failed_connections,connection_success_rate,messages_sent,messages_received,average_latency_us,throughput_messages_per_second
+```
+
+For a quick smoke test on a laptop, run fewer clients:
+
+```sh
+./build-stage2/bin/stress_client --clients 20 --duration 5 --csv stress_results_smoke.csv
 ```
 
 ## Run

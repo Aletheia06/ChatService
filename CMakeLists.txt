@@ -40,7 +40,12 @@ add_executable(chat_client
 )
 target_link_libraries(chat_client PRIVATE chat_common muduo_net)
 
-set_target_properties(chat_server chat_client PROPERTIES
+add_executable(stress_client
+  tools/StressClient.cc
+)
+target_link_libraries(stress_client PRIVATE chat_common pthread)
+
+set_target_properties(chat_server chat_client stress_client PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/bin
 )
 

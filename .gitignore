@@ -29,6 +29,7 @@ muduo/patches/
 *.exe
 *.pdb
 chatservice.*.log
+stress_results*.csv
 
 # Editor and OS files
 .idea/
