@@ -56,10 +56,10 @@ On Ubuntu-like systems, the package is usually named `qt6-base-dev`.
 
 ## Run
 
-Start the muduo server first from the repository root on Linux or WSL:
+Start the muduo server first from the repository root on Linux or WSL. If this is a fresh checkout, build it first with the top-level README steps, then run:
 
 ```sh
-./build-stage2/bin/chat_server
+./build/bin/chat_server
 ```
 
 Start the GUI client:

@@ -1,5 +1,7 @@
 # ChatService
 
+[中文 README](README.zh-CN.md)
+
 Stage 2 is a muduo-based TCP chat system optimized for higher concurrency. It keeps the Stage 1 user, private-message, and room features, then adds a muduo worker thread pool, multiple `EventLoop` instances, lower-lock routing, asynchronous logging, and periodic performance statistics.
 
 The server and client speak a simple line-delimited JSON protocol: each TCP message is one JSON object followed by `\n`.
@@ -192,24 +194,41 @@ The Stage 1 server could bottleneck in four places:
 
 Stage 2 addresses those points with muduo worker loops, connection-context session lookup, one-lock recipient snapshots, reusable serialized broadcast payloads, atomic metrics counters, and asynchronous logging. The remaining likely bottlenecks are JSON parsing cost, large room fan-out, and slow client output buffers. Those are acceptable for this stage because the protocol is still intentionally simple and the broadcast path no longer holds shared-state locks while sending.
 
-## Build
+## Build From A Fresh GitHub Clone
 
-This muduo tree is Linux-oriented, so build the server and CLI tools on Linux or WSL. Install CMake, compiler tools, Boost headers, and SQLite development headers first, for example `sudo apt install cmake build-essential libboost-dev sqlite3 libsqlite3-dev` on Ubuntu-like systems.
+The muduo server tree is Linux-oriented, so build the server, CLI client, and stress tool on Linux or WSL. From a fresh GitHub checkout:
 
 ```sh
-cmake -S . -B build-stage2 -DCMAKE_BUILD_TYPE=Debug
-cmake --build build-stage2
-ctest --test-dir build-stage2 --output-on-failure
+git clone <your-repo-url> ChatService
+cd ChatService
+sudo apt update
+sudo apt install cmake build-essential libboost-dev sqlite3 libsqlite3-dev
 ```
 
-Build the Qt GUI client separately with Qt 6:
+Configure and build the server-side project:
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+ctest --test-dir build --output-on-failure
+```
+
+After this, the generated binaries are under `build/bin/`:
+
+```text
+build/bin/chat_server
+build/bin/chat_client
+build/bin/stress_client
+```
+
+Build the Qt GUI client separately with Qt 6. On Linux:
 
 ```sh
 cmake -S qt-client -B build-qt-client -DCMAKE_BUILD_TYPE=Release
 cmake --build build-qt-client
 ```
 
-On Windows, pass your Qt install path if CMake cannot find it:
+On Windows, install Qt 6 first, then pass your Qt install path if CMake cannot find it:
 
 ```bat
 cmake -S qt-client -B build-qt-client -DCMAKE_PREFIX_PATH=C:\Qt\6.7.0\msvc2019_64
@@ -223,8 +242,8 @@ The server stores private and room messages in SQLite through `server/ChatStorag
 You can change the database path with either:
 
 ```sh
-CHATSERVICE_DB_PATH=/var/lib/chatservice/chat_history.sqlite3 ./build-stage2/bin/chat_server
-./build-stage2/bin/chat_server --db /var/lib/chatservice/chat_history.sqlite3
+CHATSERVICE_DB_PATH=/var/lib/chatservice/chat_history.sqlite3 ./build/bin/chat_server
+./build/bin/chat_server --db /var/lib/chatservice/chat_history.sqlite3
 ```
 
 SQLite WAL mode and `synchronous=NORMAL` are enabled at startup. Private conversations use normalized ids in the form `private:min_user:max_user`, so `alice` to `bob` and `bob` to `alice` load the same history thread.
@@ -232,7 +251,7 @@ SQLite WAL mode and `synchronous=NORMAL` are enabled at startup. Private convers
 For a safe offline export, stop the server or point at a stable database copy, then run:
 
 ```sh
-./build-stage2/bin/chat_server --db chat_history.sqlite3 --dump-history history_dump.json
+./build/bin/chat_server --db chat_history.sqlite3 --dump-history history_dump.json
 ```
 
 ## Stress Test
@@ -240,7 +259,7 @@ For a safe offline export, stop the server or point at a stable database copy, t
 The stress tool is a C++ executable that uses `std::thread` and POSIX sockets. By default it starts 1000 concurrent clients. Each client connects, logs in as `stress_N`, and sends one self-addressed private message every second.
 
 ```sh
-./build-stage2/bin/stress_client --clients 1000 --duration 60 --csv stress_results.csv
+./build/bin/stress_client --clients 1000 --duration 60 --csv stress_results.csv
 ```
 
 Useful options:
@@ -262,7 +281,7 @@ clients,duration_seconds,elapsed_seconds,connection_attempts,successful_connecti
 For a quick smoke test on a laptop, run fewer clients:
 
 ```sh
-./build-stage2/bin/stress_client --clients 20 --duration 5 --csv stress_results_smoke.csv
+./build/bin/stress_client --clients 20 --duration 5 --csv stress_results_smoke.csv
 ```
 
 ## Run
@@ -270,13 +289,13 @@ For a quick smoke test on a laptop, run fewer clients:
 Start the server in one terminal:
 
 ```sh
-./build-stage2/bin/chat_server
+./build/bin/chat_server
 ```
 
 Start one or more clients in other terminals:
 
 ```sh
-./build-stage2/bin/chat_client
+./build/bin/chat_client
 ```
 
 The Qt GUI client defaults to `47.109.187.23:8888` from `qt-client/src/ClientConfig.h`. The login page hides host and port by default; use Advanced Settings to override them.
