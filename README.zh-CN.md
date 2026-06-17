@@ -1,6 +1,6 @@
 # ChatService 中文说明
 
-[English README](README.md)
+**语言 / Language:** [English](README.md) | [中文](README.zh-CN.md)
 
 ChatService 是一个基于 muduo 的 TCP 聊天系统，支持登录、在线用户列表、私聊、聊天室、房间消息和压力测试。服务端使用行分隔 JSON 协议，每一条 TCP 消息都是一个 JSON 对象加一个换行符 `\n`。
 

@@ -1,6 +1,6 @@
 # ChatService
 
-[中文 README](README.zh-CN.md)
+**Language:** [English](README.md) | [中文](README.zh-CN.md)
 
 Stage 2 is a muduo-based TCP chat system optimized for higher concurrency. It keeps the Stage 1 user, private-message, and room features, then adds a muduo worker thread pool, multiple `EventLoop` instances, lower-lock routing, asynchronous logging, and periodic performance statistics.
 
