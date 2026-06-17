@@ -2,6 +2,7 @@
 
 #include "Protocol.h"
 
+#include <QDebug>
 #include <QJsonObject>
 
 ChatClient::ChatClient(QObject* parent)
@@ -65,6 +66,7 @@ void ChatClient::requestUsers()
 
 void ChatClient::sendPrivateMessage(const QString& target, const QString& message)
 {
+  qDebug() << "ChatClient sending private message to target:" << target;
   sendLine(Protocol::buildPrivateMessage(target, message));
 }
 
@@ -161,6 +163,7 @@ void ChatClient::handleObject(const QJsonObject& object)
   if (type == "ok")
   {
     const QString message = Protocol::stringValue(object, "message");
+    qDebug() << "ChatClient received ok response:" << message;
     if (message.startsWith("logged in as "))
     {
       currentUsername_ = message.mid(QString("logged in as ").size());
@@ -199,8 +202,10 @@ void ChatClient::handleObject(const QJsonObject& object)
 
   if (type == "private")
   {
-    emit privateMessageReceived(Protocol::stringValue(object, "from"),
-                                Protocol::stringValue(object, "message"));
+    const QString from = Protocol::stringValue(object, "from");
+    const QString message = Protocol::stringValue(object, "message");
+    qDebug() << "ChatClient received private event from:" << from;
+    emit privateMessageReceived(from, message);
     return;
   }
 

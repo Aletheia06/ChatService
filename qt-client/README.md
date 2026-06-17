@@ -12,6 +12,14 @@ This directory contains a native Qt6 Widgets desktop client for the existing mud
 - Maintain a local room list for rooms joined by this GUI client.
 - Handle partial TCP packets and multiple JSON lines per read.
 
+## UI
+
+The client uses Qt Widgets only. The visual style is centralized in a small QSS helper and keeps a clean light theme with a clear sidebar, rounded inputs, rounded buttons, and simple message bubbles.
+
+Private messages, room messages, system messages, and error messages use different bubble styles. Outgoing messages are aligned to the right, incoming messages are aligned to the left, and system or error messages are centered.
+
+Rooms are still local-only because the server currently has no room-list API.
+
 ## Requirements
 
 - CMake 3.16 or newer.

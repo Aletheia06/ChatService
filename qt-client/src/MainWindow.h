@@ -4,13 +4,17 @@
 #include <QMainWindow>
 #include <QString>
 #include <QStringList>
+#include <QtCore/Qt>
 
 class ChatClient;
 class QLabel;
 class QLineEdit;
 class QListWidget;
+class QListWidgetItem;
 class QPushButton;
-class QTextBrowser;
+class QScrollArea;
+class QVBoxLayout;
+class QWidget;
 
 class MainWindow : public QMainWindow
 {
@@ -30,6 +34,7 @@ class MainWindow : public QMainWindow
   void updateUsers(const QStringList& users);
   void showInfo(const QString& message);
   void showError(const QString& message);
+  void handleConnectionError(const QString& message);
   void handlePrivateMessage(const QString& from, const QString& message);
   void handleRoomMessage(const QString& room, const QString& from, const QString& message);
   void handleDisconnected();
@@ -45,15 +50,27 @@ class MainWindow : public QMainWindow
   void buildUi();
   void connectSignals();
   void setCurrentChat(ChatMode mode, const QString& name);
+  QListWidgetItem* addUserIfMissing(const QString& username);
   void addRoomIfMissing(const QString& room);
   void removeRoom(const QString& room);
-  void appendHistory(const QString& text);
+  void appendSystemMessage(const QString& text);
+  void appendErrorMessage(const QString& text);
+  void appendPrivateMessage(const QString& from, const QString& message, bool isMine);
+  void appendRoomMessage(const QString& room, const QString& from, const QString& message, bool isMine);
+  void appendBubble(QWidget* bubble, Qt::Alignment alignment);
+  void scrollChatToBottom();
+  void setConnectionStatus(const QString& text, const QString& state);
+  void setActionStatus(const QString& text);
   QString selectedRoom() const;
 
   ChatClient* client_;
+  QLabel* usernameLabel_;
+  QLabel* connectionStatusLabel_;
   QListWidget* usersList_;
   QListWidget* roomsList_;
-  QTextBrowser* chatHistory_;
+  QScrollArea* messageScrollArea_;
+  QWidget* messageContainer_;
+  QVBoxLayout* messageLayout_;
   QLineEdit* messageEdit_;
   QPushButton* sendButton_;
   QPushButton* refreshUsersButton_;
@@ -61,9 +78,10 @@ class MainWindow : public QMainWindow
   QPushButton* joinRoomButton_;
   QPushButton* leaveRoomButton_;
   QLabel* chatTitleLabel_;
-  QLabel* statusLabel_;
+  QLabel* actionStatusLabel_;
   ChatMode currentMode_;
-  QString currentTarget_;
+  QString currentPrivateTarget_;
+  QString currentRoomName_;
   QString pendingCreateRoom_;
   QString pendingJoinRoom_;
   QString pendingLeaveRoom_;

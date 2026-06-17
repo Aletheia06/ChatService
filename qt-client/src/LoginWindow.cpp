@@ -104,8 +104,9 @@ void LoginWindow::setStatus(const QString& message)
 
 void LoginWindow::buildUi()
 {
+  setObjectName("loginWindow");
   setWindowTitle("Chat Login");
-  resize(360, 210);
+  resize(390, 250);
 
   hostEdit_ = new QLineEdit("127.0.0.1", this);
   portSpinBox_ = new QSpinBox(this);
@@ -115,9 +116,15 @@ void LoginWindow::buildUi()
   usernameEdit_->setPlaceholderText("alice");
   loginButton_ = new QPushButton("Login", this);
   statusLabel_ = new QLabel("Enter server and username.", this);
+  statusLabel_->setObjectName("loginStatus");
   statusLabel_->setWordWrap(true);
 
+  QLabel* titleLabel = new QLabel("Chat Login", this);
+  titleLabel->setObjectName("appTitle");
+
   QFormLayout* form = new QFormLayout;
+  form->setContentsMargins(0, 0, 0, 0);
+  form->setSpacing(12);
   form->addRow("Host", hostEdit_);
   form->addRow("Port", portSpinBox_);
   form->addRow("Username", usernameEdit_);
@@ -127,6 +134,9 @@ void LoginWindow::buildUi()
   buttonRow->addWidget(loginButton_);
 
   QVBoxLayout* layout = new QVBoxLayout(this);
+  layout->setContentsMargins(24, 24, 24, 24);
+  layout->setSpacing(14);
+  layout->addWidget(titleLabel);
   layout->addLayout(form);
   layout->addLayout(buttonRow);
   layout->addWidget(statusLabel_);

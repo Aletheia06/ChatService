@@ -1,5 +1,6 @@
 #include "Protocol.h"
 
+#include <QDebug>
 #include <QJsonDocument>
 #include <QJsonParseError>
 #include <QJsonValue>
@@ -48,7 +49,10 @@ QByteArray buildPrivateMessage(const QString& target, const QString& message)
   QJsonObject object = baseObject("private");
   object.insert("target", target);
   object.insert("message", message);
-  return buildLine(object);
+  const QByteArray line = buildLine(object);
+  qDebug() << "Private message JSON line:" << line
+           << "endsWithNewline:" << line.endsWith('\n');
+  return line;
 }
 
 QByteArray buildCreateRoom(const QString& room)

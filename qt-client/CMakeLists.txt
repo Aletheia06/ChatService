@@ -11,10 +11,14 @@ find_package(Qt6 REQUIRED COMPONENTS Core Widgets Network)
 
 add_executable(chat_gui_client
   src/main.cpp
+  src/AppStyle.h
+  src/AppStyle.cpp
   src/Protocol.h
   src/Protocol.cpp
   src/ChatClient.h
   src/ChatClient.cpp
+  src/MessageBubble.h
+  src/MessageBubble.cpp
   src/LoginWindow.h
   src/LoginWindow.cpp
   src/MainWindow.h
