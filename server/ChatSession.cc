@@ -67,6 +67,38 @@ void ChatSession::handleRequest(const JsonObject& request)
                              fieldOrEmpty(request, "room"),
                              fieldOrEmpty(request, "message"));
   }
+  else if (type == "history_private")
+  {
+    std::string before = fieldOrEmpty(request, "before");
+    if (before.empty())
+    {
+      before = fieldOrEmpty(request, "before_timestamp");
+    }
+    if (before.empty())
+    {
+      before = fieldOrEmpty(request, "beforeTimestamp");
+    }
+    server_->sendPrivateHistory(shared_from_this(),
+                                fieldOrEmpty(request, "peer"),
+                                fieldOrEmpty(request, "limit"),
+                                before);
+  }
+  else if (type == "history_room")
+  {
+    std::string before = fieldOrEmpty(request, "before");
+    if (before.empty())
+    {
+      before = fieldOrEmpty(request, "before_timestamp");
+    }
+    if (before.empty())
+    {
+      before = fieldOrEmpty(request, "beforeTimestamp");
+    }
+    server_->sendRoomHistory(shared_from_this(),
+                             fieldOrEmpty(request, "room"),
+                             fieldOrEmpty(request, "limit"),
+                             before);
+  }
   else
   {
     sendJson(makeErrorResponse("unknown request type"));

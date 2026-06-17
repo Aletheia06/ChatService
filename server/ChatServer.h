@@ -4,6 +4,7 @@
 #include "server/ChatSession.h"
 #include "server/RoomManager.h"
 #include "server/ServerMetrics.h"
+#include "server/ChatStorage.h"
 #include "server/UserManager.h"
 
 #include "muduo/net/TcpServer.h"
@@ -19,6 +20,7 @@ class ChatServer
   ChatServer(muduo::net::EventLoop* loop,
              const muduo::net::InetAddress& listenAddr);
 
+  bool initStorage(const std::string& dbPath);
   void start();
 
   void login(const ChatSessionPtr& session, const std::string& username);
@@ -33,6 +35,14 @@ class ChatServer
   void sendRoomMessage(const ChatSessionPtr& session,
                        const std::string& room,
                        const std::string& message);
+  void sendPrivateHistory(const ChatSessionPtr& session,
+                          const std::string& peer,
+                          const std::string& limitText,
+                          const std::string& beforeText);
+  void sendRoomHistory(const ChatSessionPtr& session,
+                       const std::string& room,
+                       const std::string& limitText,
+                       const std::string& beforeText);
 
  private:
   void onConnection(const muduo::net::TcpConnectionPtr& connection);
@@ -50,6 +60,7 @@ class ChatServer
   muduo::net::TcpServer server_;
   UserManager userManager_;
   RoomManager roomManager_;
+  ChatStorage storage_;
   ServerMetrics metrics_;
 };
 

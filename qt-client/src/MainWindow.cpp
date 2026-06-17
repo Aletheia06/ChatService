@@ -1,12 +1,15 @@
 #include "MainWindow.h"
 
 #include "ChatClient.h"
-#include "MessageBubble.h"
+#include "ClientConfig.h"
+#include "Protocol.h"
 
+#include <QDateTime>
 #include <QFrame>
-#include <QDebug>
 #include <QHBoxLayout>
 #include <QInputDialog>
+#include <QJsonObject>
+#include <QJsonValue>
 #include <QLabel>
 #include <QLineEdit>
 #include <QList>
@@ -16,6 +19,7 @@
 #include <QPushButton>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QSignalBlocker>
 #include <QSizePolicy>
 #include <QSplitter>
 #include <QStyle>
@@ -23,8 +27,14 @@
 #include <QVBoxLayout>
 #include <QWidget>
 
+#include <algorithm>
+
 namespace
 {
+
+constexpr int kValueRole = Qt::UserRole;
+constexpr int kConversationTypeRole = Qt::UserRole + 1;
+constexpr int kConversationIdRole = Qt::UserRole + 2;
 
 QLabel* createSectionLabel(const QString& text, QWidget* parent)
 {
@@ -40,17 +50,14 @@ QPushButton* createSidebarButton(const QString& text, QWidget* parent)
   return button;
 }
 
-QString userIndicator()
-{
-  return QString::fromUtf8("\342\200\242 ");
-}
-
-QListWidgetItem* findListItemByValue(QListWidget* list, const QString& value)
+QListWidgetItem* findListItemByValue(QListWidget* list,
+                                     const QString& value,
+                                     int role = kValueRole)
 {
   for (int row = 0; row < list->count(); ++row)
   {
     QListWidgetItem* item = list->item(row);
-    if (item != nullptr && item->data(Qt::UserRole).toString() == value)
+    if (item != nullptr && item->data(role).toString() == value)
     {
       return item;
     }
@@ -65,6 +72,53 @@ void refreshStyle(QWidget* widget)
   widget->update();
 }
 
+QString unreadPrefix(int unreadCount)
+{
+  return unreadCount > 0 ? QString("(%1) ").arg(unreadCount) : QString();
+}
+
+QString userItemText(const QString& username, int unreadCount)
+{
+  return unreadPrefix(unreadCount) + "@ " + username;
+}
+
+QString roomItemText(const QString& room, int unreadCount)
+{
+  return unreadPrefix(unreadCount) + "# " + room;
+}
+
+int typeRoleValue(MainWindow::ConversationType type)
+{
+  switch (type)
+  {
+    case MainWindow::ConversationType::Private:
+      return 1;
+    case MainWindow::ConversationType::Room:
+      return 2;
+    case MainWindow::ConversationType::None:
+      return 0;
+  }
+  return 0;
+}
+
+MainWindow::ConversationType conversationTypeFromRole(int value)
+{
+  if (value == 1)
+  {
+    return MainWindow::ConversationType::Private;
+  }
+  if (value == 2)
+  {
+    return MainWindow::ConversationType::Room;
+  }
+  return MainWindow::ConversationType::None;
+}
+
+qint64 currentSeconds()
+{
+  return QDateTime::currentSecsSinceEpoch();
+}
+
 }  // namespace
 
 MainWindow::MainWindow(ChatClient* client, QWidget* parent)
@@ -74,6 +128,7 @@ MainWindow::MainWindow(ChatClient* client, QWidget* parent)
     connectionStatusLabel_(nullptr),
     usersList_(nullptr),
     roomsList_(nullptr),
+    recentConversationsList_(nullptr),
     messageScrollArea_(nullptr),
     messageContainer_(nullptr),
     messageLayout_(nullptr),
@@ -85,7 +140,8 @@ MainWindow::MainWindow(ChatClient* client, QWidget* parent)
     leaveRoomButton_(nullptr),
     chatTitleLabel_(nullptr),
     actionStatusLabel_(nullptr),
-    currentMode_(ChatMode::None)
+    currentType_(ConversationType::None),
+    localMessageSequence_(0)
 {
   buildUi();
   connectSignals();
@@ -93,7 +149,6 @@ MainWindow::MainWindow(ChatClient* client, QWidget* parent)
   usernameLabel_->setText(client_->username());
   setConnectionStatus("Connected", "connected");
   setActionStatus("Connected as " + client_->username());
-  appendSystemMessage("Connected as " + client_->username());
   client_->requestUsers();
 }
 
@@ -106,8 +161,12 @@ void MainWindow::refreshUsers()
 void MainWindow::createRoom()
 {
   bool ok = false;
-  const QString room = QInputDialog::getText(this, "Create Room", "Room name",
-                                            QLineEdit::Normal, QString(), &ok).trimmed();
+  const QString room = QInputDialog::getText(this,
+                                             "Create Room",
+                                             "Room name",
+                                             QLineEdit::Normal,
+                                             QString(),
+                                             &ok).trimmed();
   if (!ok)
   {
     return;
@@ -126,8 +185,12 @@ void MainWindow::createRoom()
 void MainWindow::joinRoom()
 {
   bool ok = false;
-  const QString room = QInputDialog::getText(this, "Join Room", "Room name",
-                                            QLineEdit::Normal, QString(), &ok).trimmed();
+  const QString room = QInputDialog::getText(this,
+                                             "Join Room",
+                                             "Room name",
+                                             QLineEdit::Normal,
+                                             QString(),
+                                             &ok).trimmed();
   if (!ok)
   {
     return;
@@ -167,33 +230,56 @@ void MainWindow::sendCurrentMessage()
     return;
   }
 
-  if (currentMode_ == ChatMode::Private)
+  if (currentType_ == ConversationType::Private)
   {
-    if (currentPrivateTarget_.isEmpty())
+    if (currentConversationId_.isEmpty())
     {
       setActionStatus("Select an online user first.");
-      appendSystemMessage("Select an online user before sending a private message.");
       return;
     }
-    qDebug() << "GUI sending private message to target:" << currentPrivateTarget_;
-    client_->sendPrivateMessage(currentPrivateTarget_, text);
-    appendPrivateMessage(currentPrivateTarget_, text, true);
+
+    ChatMessage message;
+    message.sender = client_->username();
+    message.receiver = currentConversationId_;
+    message.content = text;
+    message.createdAt = currentSeconds();
+    message.kind = MessageBubble::Kind::Mine;
+    message.dedupeKey = nextLocalMessageKey();
+
+    client_->sendPrivateMessage(currentConversationId_, text);
+    addMessageToConversation(ConversationType::Private,
+                             currentConversationId_,
+                             message,
+                             true,
+                             false);
     messageEdit_->clear();
     messageEdit_->setFocus();
     setActionStatus("Message sent.");
     return;
   }
 
-  if (currentMode_ == ChatMode::Room)
+  if (currentType_ == ConversationType::Room)
   {
-    if (currentRoomName_.isEmpty())
+    if (currentConversationId_.isEmpty())
     {
       setActionStatus("Select a room first.");
-      appendSystemMessage("Select a room before sending a room message.");
       return;
     }
-    client_->sendRoomMessage(currentRoomName_, text);
-    appendRoomMessage(currentRoomName_, client_->username(), text, true);
+
+    ChatMessage message;
+    message.sender = client_->username();
+    message.room = currentConversationId_;
+    message.content = text;
+    message.createdAt = currentSeconds();
+    message.kind = MessageBubble::Kind::Mine;
+    message.dedupeKey = nextLocalMessageKey();
+
+    client_->sendRoomMessage(currentConversationId_, text);
+    addMessageToConversation(ConversationType::Room,
+                             currentConversationId_,
+                             message,
+                             true,
+                             false);
     messageEdit_->clear();
     messageEdit_->setFocus();
     setActionStatus("Message sent.");
@@ -201,7 +287,6 @@ void MainWindow::sendCurrentMessage()
   }
 
   setActionStatus("Select an online user or room first.");
-  appendSystemMessage("Select an online user or room before sending.");
 }
 
 void MainWindow::selectPrivateChat()
@@ -212,9 +297,8 @@ void MainWindow::selectPrivateChat()
     return;
   }
 
-  QListWidgetItem* item = selected.first();
-  roomsList_->clearSelection();
-  setCurrentChat(ChatMode::Private, item->data(Qt::UserRole).toString());
+  selectConversation(ConversationType::Private,
+                     selected.first()->data(kValueRole).toString());
 }
 
 void MainWindow::selectRoomChat()
@@ -225,9 +309,23 @@ void MainWindow::selectRoomChat()
     return;
   }
 
+  selectConversation(ConversationType::Room,
+                     selected.first()->data(kValueRole).toString());
+}
+
+void MainWindow::selectRecentConversation()
+{
+  const QList<QListWidgetItem*> selected =
+      recentConversationsList_->selectedItems();
+  if (selected.isEmpty())
+  {
+    return;
+  }
+
   QListWidgetItem* item = selected.first();
-  usersList_->clearSelection();
-  setCurrentChat(ChatMode::Room, item->data(Qt::UserRole).toString());
+  selectConversation(
+      conversationTypeFromRole(item->data(kConversationTypeRole).toInt()),
+      item->data(kConversationIdRole).toString());
 }
 
 void MainWindow::updateUsers(const QStringList& users)
@@ -238,9 +336,10 @@ void MainWindow::updateUsers(const QStringList& users)
     addUserIfMissing(user);
   }
 
-  if (!currentPrivateTarget_.isEmpty())
+  if (currentType_ == ConversationType::Private &&
+      !currentConversationId_.isEmpty())
   {
-    addUserIfMissing(currentPrivateTarget_);
+    addUserIfMissing(currentConversationId_);
   }
   setActionStatus("Online users refreshed.");
 }
@@ -254,7 +353,6 @@ void MainWindow::showInfo(const QString& message)
     pendingJoinRoom_ = pendingCreateRoom_;
     pendingCreateRoom_.clear();
     setActionStatus("Room created. Joining...");
-    appendSystemMessage("Room created. Joining room...");
     client_->joinRoom(pendingJoinRoom_);
     return;
   }
@@ -264,12 +362,7 @@ void MainWindow::showInfo(const QString& message)
     const QString room = pendingJoinRoom_;
     addRoomIfMissing(room);
     pendingJoinRoom_.clear();
-    QListWidgetItem* item = findListItemByValue(roomsList_, room);
-    if (item != nullptr)
-    {
-      roomsList_->setCurrentItem(item);
-    }
-    setCurrentChat(ChatMode::Room, room);
+    selectConversation(ConversationType::Room, room);
     appendSystemMessage("Joined room: " + room);
     return;
   }
@@ -283,10 +376,12 @@ void MainWindow::showInfo(const QString& message)
     return;
   }
 
-  if (message != "private message sent")
+  if (message == "private message sent" || message == "private message saved")
   {
-    appendSystemMessage(message);
+    return;
   }
+
+  appendSystemMessage(message);
 }
 
 void MainWindow::showError(const QString& message)
@@ -304,40 +399,88 @@ void MainWindow::handleConnectionError(const QString& message)
   showError(message);
 }
 
-void MainWindow::handlePrivateMessage(const QString& from, const QString& message)
+void MainWindow::handlePrivateMessage(const QString& from,
+                                      const QString& message,
+                                      qint64 id,
+                                      qint64 createdAt)
 {
-  qDebug() << "GUI displaying incoming private message from:" << from;
-  QListWidgetItem* item = addUserIfMissing(from);
-  if ((currentMode_ == ChatMode::None ||
-       (currentMode_ == ChatMode::Private && currentPrivateTarget_.isEmpty())) &&
-      item != nullptr)
+  addUserIfMissing(from);
+
+  ChatMessage chatMessage;
+  chatMessage.id = id;
+  chatMessage.sender = from;
+  chatMessage.receiver = client_->username();
+  chatMessage.content = message;
+  chatMessage.createdAt = createdAt > 0 ? createdAt : currentSeconds();
+  chatMessage.kind = MessageBubble::Kind::Other;
+  if (id > 0)
   {
-    usersList_->setCurrentItem(item);
-    setCurrentChat(ChatMode::Private, from);
+    chatMessage.dedupeKey = "db:" + QString::number(id);
   }
 
-  appendPrivateMessage(from, message, false);
+  addMessageToConversation(ConversationType::Private,
+                           from,
+                           chatMessage,
+                           true,
+                           true);
 }
 
-void MainWindow::handleRoomMessage(const QString& room, const QString& from, const QString& message)
+void MainWindow::handleRoomMessage(const QString& room,
+                                   const QString& from,
+                                   const QString& message,
+                                   qint64 id,
+                                   qint64 createdAt)
 {
   if (from == client_->username())
   {
     return;
   }
-  appendRoomMessage(room, from, message, false);
+
+  addRoomIfMissing(room);
+
+  ChatMessage chatMessage;
+  chatMessage.id = id;
+  chatMessage.sender = from;
+  chatMessage.room = room;
+  chatMessage.content = message;
+  chatMessage.createdAt = createdAt > 0 ? createdAt : currentSeconds();
+  chatMessage.kind = MessageBubble::Kind::Other;
+  if (id > 0)
+  {
+    chatMessage.dedupeKey = "db:" + QString::number(id);
+  }
+
+  addMessageToConversation(ConversationType::Room,
+                           room,
+                           chatMessage,
+                           true,
+                           true);
+}
+
+void MainWindow::handlePrivateHistory(const QString& peer,
+                                      const QJsonArray& messages)
+{
+  mergePrivateHistory(peer, messages);
+}
+
+void MainWindow::handleRoomHistory(const QString& room,
+                                   const QJsonArray& messages)
+{
+  mergeRoomHistory(room, messages);
 }
 
 void MainWindow::handleDisconnected()
 {
   setConnectionStatus("Disconnected", "disconnected");
   setActionStatus("Disconnected from server.");
+  messageEdit_->setEnabled(false);
+  sendButton_->setEnabled(false);
   appendSystemMessage("Disconnected from server.");
 }
 
 void MainWindow::buildUi()
 {
-  resize(1040, 700);
+  resize(1120, 720);
 
   usernameLabel_ = new QLabel(this);
   usernameLabel_->setObjectName("userNameLabel");
@@ -347,6 +490,7 @@ void MainWindow::buildUi()
 
   usersList_ = new QListWidget(this);
   roomsList_ = new QListWidget(this);
+  recentConversationsList_ = new QListWidget(this);
   refreshUsersButton_ = createSidebarButton("Refresh Users", this);
   createRoomButton_ = createSidebarButton("Create Room", this);
   joinRoomButton_ = createSidebarButton("Join Room", this);
@@ -358,22 +502,25 @@ void MainWindow::buildUi()
   leftLayout->addWidget(createSectionLabel("Current User", this));
   leftLayout->addWidget(usernameLabel_);
   leftLayout->addWidget(connectionStatusLabel_);
-  leftLayout->addSpacing(12);
+  leftLayout->addSpacing(10);
   leftLayout->addWidget(createSectionLabel("Online Users", this));
   leftLayout->addWidget(usersList_, 1);
   leftLayout->addWidget(refreshUsersButton_);
-  leftLayout->addSpacing(12);
+  leftLayout->addSpacing(10);
   leftLayout->addWidget(createSectionLabel("Rooms", this));
   leftLayout->addWidget(roomsList_, 1);
   leftLayout->addWidget(createRoomButton_);
   leftLayout->addWidget(joinRoomButton_);
   leftLayout->addWidget(leaveRoomButton_);
+  leftLayout->addSpacing(10);
+  leftLayout->addWidget(createSectionLabel("Recent Conversations", this));
+  leftLayout->addWidget(recentConversationsList_, 1);
 
   QWidget* leftPanel = new QWidget(this);
   leftPanel->setObjectName("sidebar");
   leftPanel->setAttribute(Qt::WA_StyledBackground, true);
-  leftPanel->setMinimumWidth(260);
-  leftPanel->setMaximumWidth(330);
+  leftPanel->setMinimumWidth(280);
+  leftPanel->setMaximumWidth(360);
   leftPanel->setLayout(leftLayout);
 
   chatTitleLabel_ = new QLabel("Select a user or room", this);
@@ -398,7 +545,9 @@ void MainWindow::buildUi()
 
   messageEdit_ = new QLineEdit(this);
   messageEdit_->setPlaceholderText("Type a message...");
+  messageEdit_->setEnabled(false);
   sendButton_ = new QPushButton("Send", this);
+  sendButton_->setEnabled(false);
   actionStatusLabel_ = new QLabel(this);
   actionStatusLabel_->setObjectName("actionStatus");
   actionStatusLabel_->setWordWrap(true);
@@ -428,7 +577,7 @@ void MainWindow::buildUi()
   splitter->addWidget(centerPanel);
   splitter->setStretchFactor(0, 0);
   splitter->setStretchFactor(1, 1);
-  splitter->setSizes(QList<int>() << 290 << 750);
+  splitter->setSizes(QList<int>() << 320 << 800);
 
   setCentralWidget(splitter);
 }
@@ -443,6 +592,7 @@ void MainWindow::connectSignals()
   connect(messageEdit_, &QLineEdit::returnPressed, this, &MainWindow::sendCurrentMessage);
   connect(usersList_, &QListWidget::itemSelectionChanged, this, &MainWindow::selectPrivateChat);
   connect(roomsList_, &QListWidget::itemSelectionChanged, this, &MainWindow::selectRoomChat);
+  connect(recentConversationsList_, &QListWidget::itemSelectionChanged, this, &MainWindow::selectRecentConversation);
 
   connect(client_, &ChatClient::usersUpdated, this, &MainWindow::updateUsers);
   connect(client_, &ChatClient::infoMessage, this, &MainWindow::showInfo);
@@ -450,117 +600,340 @@ void MainWindow::connectSignals()
   connect(client_, &ChatClient::connectionError, this, &MainWindow::handleConnectionError);
   connect(client_, &ChatClient::privateMessageReceived, this, &MainWindow::handlePrivateMessage);
   connect(client_, &ChatClient::roomMessageReceived, this, &MainWindow::handleRoomMessage);
+  connect(client_, &ChatClient::privateHistoryReceived, this, &MainWindow::handlePrivateHistory);
+  connect(client_, &ChatClient::roomHistoryReceived, this, &MainWindow::handleRoomHistory);
   connect(client_, &ChatClient::disconnected, this, &MainWindow::handleDisconnected);
 }
 
-void MainWindow::setCurrentChat(ChatMode mode, const QString& name)
+void MainWindow::selectConversation(ConversationType type, const QString& id)
 {
-  currentMode_ = mode;
-  if (mode == ChatMode::Private)
+  if (type == ConversationType::None || id.isEmpty())
   {
-    currentPrivateTarget_ = name;
-    currentRoomName_.clear();
-    chatTitleLabel_->setText("Private chat with " + name);
-    setActionStatus("Private chat selected: " + name);
-  }
-  else if (mode == ChatMode::Room)
-  {
-    currentRoomName_ = name;
-    currentPrivateTarget_.clear();
-    chatTitleLabel_->setText("# " + name);
-    setActionStatus("Room selected: " + name);
-  }
-  else
-  {
-    currentPrivateTarget_.clear();
-    currentRoomName_.clear();
+    currentType_ = ConversationType::None;
+    currentConversationId_.clear();
     chatTitleLabel_->setText("Select a user or room");
+    messageEdit_->setEnabled(false);
+    sendButton_->setEnabled(false);
+    clearRenderedMessages();
     setActionStatus("Select a conversation.");
+    return;
   }
+
+  ConversationState& conversation = ensureConversation(type, id);
+  conversation.unreadCount = 0;
+  currentType_ = type;
+  currentConversationId_ = id;
+  updateConversationListItem(&conversation);
+  updateConversationBadges(&conversation);
+
+  {
+    QSignalBlocker usersBlocker(usersList_);
+    QSignalBlocker roomsBlocker(roomsList_);
+    QSignalBlocker recentBlocker(recentConversationsList_);
+    usersList_->clearSelection();
+    roomsList_->clearSelection();
+    recentConversationsList_->clearSelection();
+
+    if (type == ConversationType::Private)
+    {
+      QListWidgetItem* userItem = addUserIfMissing(id);
+      if (userItem != nullptr)
+      {
+        usersList_->setCurrentItem(userItem);
+      }
+    }
+    else if (type == ConversationType::Room)
+    {
+      addRoomIfMissing(id);
+      QListWidgetItem* roomItem = findListItemByValue(roomsList_, id);
+      if (roomItem != nullptr)
+      {
+        roomsList_->setCurrentItem(roomItem);
+      }
+    }
+
+    if (conversation.recentItem != nullptr)
+    {
+      recentConversationsList_->setCurrentItem(conversation.recentItem);
+    }
+  }
+
+  chatTitleLabel_->setText(conversationTitle(type, id));
+  messageEdit_->setEnabled(true);
+  sendButton_->setEnabled(true);
+  requestHistoryIfNeeded(&conversation);
+  renderCurrentConversation();
+  setActionStatus(conversationTitle(type, id));
 }
 
-QListWidgetItem* MainWindow::addUserIfMissing(const QString& username)
+MainWindow::ConversationState& MainWindow::ensureConversation(
+    ConversationType type,
+    const QString& id)
 {
-  if (username.isEmpty() || username == client_->username())
+  const QString key = conversationKey(type, id);
+  ConversationState& conversation = conversations_[key];
+  if (conversation.type == ConversationType::None)
+  {
+    conversation.type = type;
+    conversation.id = id;
+  }
+  updateConversationListItem(&conversation);
+  return conversation;
+}
+
+MainWindow::ConversationState* MainWindow::conversationForKey(
+    const QString& key)
+{
+  QHash<QString, ConversationState>::iterator it = conversations_.find(key);
+  if (it == conversations_.end())
   {
     return nullptr;
   }
+  return &it.value();
+}
 
-  QListWidgetItem* existing = findListItemByValue(usersList_, username);
-  if (existing != nullptr)
+MainWindow::ConversationState* MainWindow::currentConversation()
+{
+  return conversationForKey(currentConversationKey());
+}
+
+QString MainWindow::conversationKey(ConversationType type,
+                                    const QString& id) const
+{
+  if (type == ConversationType::Private)
   {
-    return existing;
+    return "private:" + id;
+  }
+  if (type == ConversationType::Room)
+  {
+    return "room:" + id;
+  }
+  return QString();
+}
+
+QString MainWindow::currentConversationKey() const
+{
+  return conversationKey(currentType_, currentConversationId_);
+}
+
+QString MainWindow::conversationTitle(ConversationType type,
+                                      const QString& id) const
+{
+  if (type == ConversationType::Private)
+  {
+    return "Private chat with " + id;
+  }
+  if (type == ConversationType::Room)
+  {
+    return "# " + id;
+  }
+  return "Select a user or room";
+}
+
+QString MainWindow::recentLabel(const ConversationState& conversation) const
+{
+  const QString base =
+      conversation.type == ConversationType::Private
+          ? "Private: " + conversation.id
+          : "# " + conversation.id;
+  return unreadPrefix(conversation.unreadCount) + base;
+}
+
+bool MainWindow::addMessageToConversation(ConversationType type,
+                                          const QString& id,
+                                          const ChatMessage& message,
+                                          bool renderIfActive,
+                                          bool markUnread)
+{
+  ConversationState& conversation = ensureConversation(type, id);
+  ChatMessage stored = message;
+  if (stored.createdAt <= 0)
+  {
+    stored.createdAt = currentSeconds();
+  }
+  if (stored.dedupeKey.isEmpty())
+  {
+    stored.dedupeKey = stored.id > 0 ? "db:" + QString::number(stored.id)
+                                     : nextLocalMessageKey();
+  }
+  if (conversation.messageKeys.contains(stored.dedupeKey))
+  {
+    return false;
   }
 
-  QListWidgetItem* item = new QListWidgetItem(userIndicator() + username, usersList_);
-  item->setData(Qt::UserRole, username);
-  return item;
-}
+  conversation.messageKeys.insert(stored.dedupeKey);
+  conversation.messages.append(stored);
+  std::sort(conversation.messages.begin(),
+            conversation.messages.end(),
+            [](const ChatMessage& left, const ChatMessage& right) {
+              if (left.createdAt != right.createdAt)
+              {
+                return left.createdAt < right.createdAt;
+              }
+              if (left.id != right.id)
+              {
+                return left.id < right.id;
+              }
+              return left.dedupeKey < right.dedupeKey;
+            });
 
-void MainWindow::addRoomIfMissing(const QString& room)
-{
-  if (findListItemByValue(roomsList_, room) == nullptr)
+  const bool active = conversationKey(type, id) == currentConversationKey();
+  if (!active && markUnread)
   {
-    QListWidgetItem* item = new QListWidgetItem("# " + room, roomsList_);
-    item->setData(Qt::UserRole, room);
+    ++conversation.unreadCount;
   }
-}
 
-void MainWindow::removeRoom(const QString& room)
-{
-  while (QListWidgetItem* item = findListItemByValue(roomsList_, room))
+  updateConversationListItem(&conversation);
+  updateConversationBadges(&conversation);
+  if (active && renderIfActive)
   {
-    delete roomsList_->takeItem(roomsList_->row(item));
+    renderCurrentConversation();
+    scrollChatToBottom();
   }
+  return true;
+}
 
-  if (currentMode_ == ChatMode::Room && currentRoomName_ == room)
+void MainWindow::mergePrivateHistory(const QString& peer,
+                                     const QJsonArray& messages)
+{
+  int added = 0;
+  for (const QJsonValue& value : messages)
   {
-    setCurrentChat(ChatMode::None, QString());
-  }
-}
+    if (!value.isObject())
+    {
+      continue;
+    }
+    const QJsonObject object = value.toObject();
 
-void MainWindow::appendSystemMessage(const QString& text)
-{
-  appendBubble(new MessageBubble("System", text, QString(), MessageBubble::Kind::System, messageContainer_),
-               Qt::AlignHCenter);
-  scrollChatToBottom();
-}
+    ChatMessage message;
+    message.id = Protocol::int64Value(object, "id");
+    message.sender = Protocol::stringValue(object, "sender");
+    message.receiver = Protocol::stringValue(object, "receiver");
+    message.content = Protocol::stringValue(object, "content");
+    message.createdAt = Protocol::int64Value(object, "created_at");
+    message.kind = message.sender == client_->username()
+                       ? MessageBubble::Kind::Mine
+                       : MessageBubble::Kind::Other;
+    if (message.id > 0)
+    {
+      message.dedupeKey = "db:" + QString::number(message.id);
+    }
 
-void MainWindow::appendErrorMessage(const QString& text)
-{
-  appendBubble(new MessageBubble("Error", text, QString(), MessageBubble::Kind::Error, messageContainer_),
-               Qt::AlignHCenter);
-  scrollChatToBottom();
-}
-
-void MainWindow::appendPrivateMessage(const QString& from, const QString& message, bool isMine)
-{
-  const QString sender = isMine ? "Me -> " + from : from;
-  appendBubble(new MessageBubble(sender,
+    if (!message.sender.isEmpty() && !message.content.isEmpty() &&
+        addMessageToConversation(ConversationType::Private,
+                                 peer,
                                  message,
-                                 QString(),
-                                 isMine ? MessageBubble::Kind::Mine : MessageBubble::Kind::Other,
-                                 messageContainer_),
-               isMine ? Qt::AlignRight : Qt::AlignLeft);
-  scrollChatToBottom();
+                                 false,
+                                 false))
+    {
+      ++added;
+    }
+  }
+
+  if (currentConversationKey() == conversationKey(ConversationType::Private, peer))
+  {
+    renderCurrentConversation();
+    scrollChatToBottom();
+  }
+  setActionStatus(QString("Loaded %1 private history message(s).").arg(added));
 }
 
-void MainWindow::appendRoomMessage(const QString& room,
-                                   const QString& from,
-                                   const QString& message,
-                                   bool isMine)
+void MainWindow::mergeRoomHistory(const QString& room,
+                                  const QJsonArray& messages)
 {
-  const QString sender = isMine ? "Me" : from;
-  appendBubble(new MessageBubble(sender,
-                                 message,
+  int added = 0;
+  for (const QJsonValue& value : messages)
+  {
+    if (!value.isObject())
+    {
+      continue;
+    }
+    const QJsonObject object = value.toObject();
+
+    ChatMessage message;
+    message.id = Protocol::int64Value(object, "id");
+    message.sender = Protocol::stringValue(object, "sender");
+    message.room = Protocol::stringValue(object, "room");
+    if (message.room.isEmpty())
+    {
+      message.room = room;
+    }
+    message.content = Protocol::stringValue(object, "content");
+    message.createdAt = Protocol::int64Value(object, "created_at");
+    message.kind = message.sender == client_->username()
+                       ? MessageBubble::Kind::Mine
+                       : MessageBubble::Kind::Other;
+    if (message.id > 0)
+    {
+      message.dedupeKey = "db:" + QString::number(message.id);
+    }
+
+    if (!message.sender.isEmpty() && !message.content.isEmpty() &&
+        addMessageToConversation(ConversationType::Room,
                                  room,
-                                 isMine ? MessageBubble::Kind::Mine : MessageBubble::Kind::Other,
-                                 messageContainer_),
-               isMine ? Qt::AlignRight : Qt::AlignLeft);
-  scrollChatToBottom();
+                                 message,
+                                 false,
+                                 false))
+    {
+      ++added;
+    }
+  }
+
+  if (currentConversationKey() == conversationKey(ConversationType::Room, room))
+  {
+    renderCurrentConversation();
+    scrollChatToBottom();
+  }
+  setActionStatus(QString("Loaded %1 room history message(s).").arg(added));
 }
 
-void MainWindow::appendBubble(QWidget* bubble, Qt::Alignment alignment)
+MainWindow::ChatMessage MainWindow::makeSystemMessage(
+    const QString& text,
+    MessageBubble::Kind kind)
+{
+  ChatMessage message;
+  message.sender = kind == MessageBubble::Kind::Error ? "Error" : "System";
+  message.content = text;
+  message.createdAt = currentSeconds();
+  message.kind = kind;
+  message.dedupeKey = nextLocalMessageKey();
+  return message;
+}
+
+QString MainWindow::nextLocalMessageKey()
+{
+  ++localMessageSequence_;
+  return "local:" + QString::number(localMessageSequence_);
+}
+
+void MainWindow::renderCurrentConversation()
+{
+  clearRenderedMessages();
+  ConversationState* conversation = currentConversation();
+  if (conversation == nullptr)
+  {
+    return;
+  }
+
+  for (const ChatMessage& message : conversation->messages)
+  {
+    appendBubble(message);
+  }
+}
+
+void MainWindow::clearRenderedMessages()
+{
+  while (QLayoutItem* item = messageLayout_->takeAt(0))
+  {
+    if (QWidget* widget = item->widget())
+    {
+      delete widget;
+    }
+    delete item;
+  }
+}
+
+void MainWindow::appendBubble(const ChatMessage& message)
 {
   QWidget* row = new QWidget(messageContainer_);
   row->setObjectName("messageRow");
@@ -570,12 +943,30 @@ void MainWindow::appendBubble(QWidget* bubble, Qt::Alignment alignment)
   rowLayout->setContentsMargins(0, 0, 0, 0);
   rowLayout->setSpacing(0);
 
-  if (alignment & Qt::AlignRight)
+  QString sender = message.sender;
+  if (message.kind == MessageBubble::Kind::Mine)
+  {
+    sender = currentType_ == ConversationType::Private && !message.receiver.isEmpty()
+                 ? "Me -> " + message.receiver
+                 : "Me";
+  }
+
+  const QString room =
+      currentType_ == ConversationType::Room ? message.room : QString();
+  MessageBubble* bubble = new MessageBubble(sender,
+                                            message.content,
+                                            room,
+                                            message.kind,
+                                            message.createdAt,
+                                            row);
+
+  if (message.kind == MessageBubble::Kind::Mine)
   {
     rowLayout->addStretch(1);
     rowLayout->addWidget(bubble);
   }
-  else if (alignment & Qt::AlignHCenter)
+  else if (message.kind == MessageBubble::Kind::System ||
+           message.kind == MessageBubble::Kind::Error)
   {
     rowLayout->addStretch(1);
     rowLayout->addWidget(bubble);
@@ -607,6 +998,183 @@ void MainWindow::scrollChatToBottom()
   });
 }
 
+void MainWindow::requestHistoryIfNeeded(ConversationState* conversation)
+{
+  if (conversation == nullptr || conversation->historyRequested)
+  {
+    return;
+  }
+
+  conversation->historyRequested = true;
+  if (conversation->type == ConversationType::Private)
+  {
+    client_->requestPrivateHistory(conversation->id,
+                                   ClientConfig::DEFAULT_HISTORY_LIMIT);
+    setActionStatus("Loading private history...");
+  }
+  else if (conversation->type == ConversationType::Room)
+  {
+    client_->requestRoomHistory(conversation->id,
+                                ClientConfig::DEFAULT_HISTORY_LIMIT);
+    setActionStatus("Loading room history...");
+  }
+}
+
+void MainWindow::updateConversationListItem(ConversationState* conversation)
+{
+  if (conversation == nullptr || conversation->type == ConversationType::None)
+  {
+    return;
+  }
+
+  const QString key = conversationKey(conversation->type, conversation->id);
+  QListWidgetItem* item = conversation->recentItem;
+  if (item == nullptr || recentConversationsList_->row(item) < 0)
+  {
+    item = findListItemByValue(recentConversationsList_, key);
+  }
+  if (item == nullptr)
+  {
+    item = new QListWidgetItem;
+    recentConversationsList_->insertItem(0, item);
+  }
+  else
+  {
+    const int row = recentConversationsList_->row(item);
+    if (row > 0)
+    {
+      recentConversationsList_->takeItem(row);
+      recentConversationsList_->insertItem(0, item);
+    }
+  }
+
+  item->setText(recentLabel(*conversation));
+  item->setData(kValueRole, key);
+  item->setData(kConversationTypeRole, typeRoleValue(conversation->type));
+  item->setData(kConversationIdRole, conversation->id);
+  conversation->recentItem = item;
+}
+
+void MainWindow::updateConversationBadges(ConversationState* conversation)
+{
+  if (conversation == nullptr)
+  {
+    return;
+  }
+
+  if (conversation->recentItem != nullptr)
+  {
+    conversation->recentItem->setText(recentLabel(*conversation));
+  }
+
+  if (conversation->type == ConversationType::Private)
+  {
+    QListWidgetItem* item = findListItemByValue(usersList_, conversation->id);
+    if (item != nullptr)
+    {
+      item->setText(userItemText(conversation->id, conversation->unreadCount));
+    }
+  }
+  else if (conversation->type == ConversationType::Room)
+  {
+    QListWidgetItem* item = findListItemByValue(roomsList_, conversation->id);
+    if (item != nullptr)
+    {
+      item->setText(roomItemText(conversation->id, conversation->unreadCount));
+    }
+  }
+}
+
+QListWidgetItem* MainWindow::addUserIfMissing(const QString& username)
+{
+  if (username.isEmpty() || username == client_->username())
+  {
+    return nullptr;
+  }
+
+  ConversationState* conversation =
+      conversationForKey(conversationKey(ConversationType::Private, username));
+  const int unreadCount = conversation == nullptr ? 0 : conversation->unreadCount;
+
+  QListWidgetItem* existing = findListItemByValue(usersList_, username);
+  if (existing != nullptr)
+  {
+    existing->setText(userItemText(username, unreadCount));
+    return existing;
+  }
+
+  QListWidgetItem* item =
+      new QListWidgetItem(userItemText(username, unreadCount), usersList_);
+  item->setData(kValueRole, username);
+  return item;
+}
+
+void MainWindow::addRoomIfMissing(const QString& room)
+{
+  if (room.isEmpty())
+  {
+    return;
+  }
+
+  ConversationState* conversation =
+      conversationForKey(conversationKey(ConversationType::Room, room));
+  const int unreadCount = conversation == nullptr ? 0 : conversation->unreadCount;
+
+  QListWidgetItem* existing = findListItemByValue(roomsList_, room);
+  if (existing != nullptr)
+  {
+    existing->setText(roomItemText(room, unreadCount));
+    return;
+  }
+
+  QListWidgetItem* item =
+      new QListWidgetItem(roomItemText(room, unreadCount), roomsList_);
+  item->setData(kValueRole, room);
+}
+
+void MainWindow::removeRoom(const QString& room)
+{
+  while (QListWidgetItem* item = findListItemByValue(roomsList_, room))
+  {
+    delete roomsList_->takeItem(roomsList_->row(item));
+  }
+
+  if (currentType_ == ConversationType::Room && currentConversationId_ == room)
+  {
+    selectConversation(ConversationType::None, QString());
+  }
+}
+
+void MainWindow::appendSystemMessage(const QString& text)
+{
+  if (currentType_ == ConversationType::None || currentConversationId_.isEmpty())
+  {
+    setActionStatus(text);
+    return;
+  }
+
+  addMessageToConversation(currentType_,
+                           currentConversationId_,
+                           makeSystemMessage(text, MessageBubble::Kind::System),
+                           true,
+                           false);
+}
+
+void MainWindow::appendErrorMessage(const QString& text)
+{
+  if (currentType_ == ConversationType::None || currentConversationId_.isEmpty())
+  {
+    setActionStatus("Error: " + text);
+    return;
+  }
+
+  addMessageToConversation(currentType_,
+                           currentConversationId_,
+                           makeSystemMessage(text, MessageBubble::Kind::Error),
+                           true,
+                           false);
+}
+
 void MainWindow::setConnectionStatus(const QString& text, const QString& state)
 {
   connectionStatusLabel_->setText(text);
@@ -622,9 +1190,15 @@ void MainWindow::setActionStatus(const QString& text)
 QString MainWindow::selectedRoom() const
 {
   const QList<QListWidgetItem*> selected = roomsList_->selectedItems();
-  if (selected.isEmpty())
+  if (!selected.isEmpty())
   {
-    return QString();
+    return selected.first()->data(kValueRole).toString();
   }
-  return selected.first()->data(Qt::UserRole).toString();
+
+  if (currentType_ == ConversationType::Room)
+  {
+    return currentConversationId_;
+  }
+
+  return QString();
 }

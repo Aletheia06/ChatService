@@ -84,6 +84,22 @@ QByteArray buildRoomMessage(const QString& room, const QString& message)
   return buildLine(object);
 }
 
+QByteArray buildPrivateHistoryRequest(const QString& peer, int limit)
+{
+  QJsonObject object = baseObject("history_private");
+  object.insert("peer", peer);
+  object.insert("limit", limit);
+  return buildLine(object);
+}
+
+QByteArray buildRoomHistoryRequest(const QString& room, int limit)
+{
+  QJsonObject object = baseObject("history_room");
+  object.insert("room", room);
+  object.insert("limit", limit);
+  return buildLine(object);
+}
+
 QJsonObject parseJsonLine(const QByteArray& line, QString* errorMessage)
 {
   QJsonParseError error;
@@ -117,6 +133,24 @@ QString stringValue(const QJsonObject& object, const QString& key)
 {
   const QJsonValue value = object.value(key);
   return value.isString() ? value.toString() : QString();
+}
+
+qint64 int64Value(const QJsonObject& object, const QString& key, qint64 fallback)
+{
+  const QJsonValue value = object.value(key);
+  if (value.isDouble())
+  {
+    return static_cast<qint64>(value.toDouble());
+  }
+
+  if (value.isString())
+  {
+    bool ok = false;
+    const qint64 parsed = value.toString().toLongLong(&ok);
+    return ok ? parsed : fallback;
+  }
+
+  return fallback;
 }
 
 }  // namespace Protocol

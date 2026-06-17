@@ -154,6 +154,83 @@ bool parseJsonString(const std::string& text,
   return false;
 }
 
+bool parseJsonNumberAsString(const std::string& text,
+                             std::size_t* pos,
+                             std::string* output,
+                             std::string* error)
+{
+  const std::size_t start = *pos;
+  if (*pos < text.size() && text[*pos] == '-')
+  {
+    ++(*pos);
+  }
+
+  const std::size_t digitsStart = *pos;
+  while (*pos < text.size() &&
+         std::isdigit(static_cast<unsigned char>(text[*pos])) != 0)
+  {
+    ++(*pos);
+  }
+
+  if (*pos == digitsStart)
+  {
+    *error = "expected string or number";
+    return false;
+  }
+
+  if (*pos < text.size() && text[*pos] == '.')
+  {
+    ++(*pos);
+    const std::size_t fractionStart = *pos;
+    while (*pos < text.size() &&
+           std::isdigit(static_cast<unsigned char>(text[*pos])) != 0)
+    {
+      ++(*pos);
+    }
+    if (*pos == fractionStart)
+    {
+      *error = "invalid number";
+      return false;
+    }
+  }
+
+  if (*pos < text.size() && (text[*pos] == 'e' || text[*pos] == 'E'))
+  {
+    ++(*pos);
+    if (*pos < text.size() && (text[*pos] == '+' || text[*pos] == '-'))
+    {
+      ++(*pos);
+    }
+    const std::size_t exponentStart = *pos;
+    while (*pos < text.size() &&
+           std::isdigit(static_cast<unsigned char>(text[*pos])) != 0)
+    {
+      ++(*pos);
+    }
+    if (*pos == exponentStart)
+    {
+      *error = "invalid number";
+      return false;
+    }
+  }
+
+  *output = text.substr(start, *pos - start);
+  return true;
+}
+
+bool parseJsonValueAsString(const std::string& text,
+                            std::size_t* pos,
+                            std::string* output,
+                            std::string* error)
+{
+  if (*pos < text.size() && text[*pos] == '"')
+  {
+    return parseJsonString(text, pos, output, error);
+  }
+
+  return parseJsonNumberAsString(text, pos, output, error);
+}
+
 }  // namespace
 
 bool parseJsonObject(const std::string& text,
@@ -202,7 +279,7 @@ bool parseJsonObject(const std::string& text,
     ++pos;
     skipWhitespace(text, &pos);
 
-    if (!parseJsonString(text, &pos, &value, error))
+    if (!parseJsonValueAsString(text, &pos, &value, error))
     {
       return false;
     }

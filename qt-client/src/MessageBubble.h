@@ -3,6 +3,7 @@
 
 #include <QString>
 #include <QWidget>
+#include <QtGlobal>
 
 class QLabel;
 
@@ -23,6 +24,7 @@ class MessageBubble : public QWidget
                          const QString& message,
                          const QString& room,
                          Kind kind,
+                         qint64 createdAt = 0,
                          QWidget* parent = nullptr);
 
  private:

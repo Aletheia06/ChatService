@@ -75,6 +75,26 @@ int main()
     return 1;
   }
 
+  if (!chatservice::parseJsonObject(
+          "{\"type\":\"history_private\",\"peer\":\"alice\",\"limit\":50}",
+          &object,
+          &error) ||
+      object["type"] != "history_private" ||
+      object["limit"] != "50")
+  {
+    return 1;
+  }
+
+  if (!chatservice::buildRequestFromCommand(
+          "HISTORY_PRIVATE bob 25", &line, &error) ||
+      !parseLine(line, &object) ||
+      object["type"] != "history_private" ||
+      object["peer"] != "bob" ||
+      object["limit"] != "25")
+  {
+    return 1;
+  }
+
   if (chatservice::buildRequestFromCommand("PRIVATE bob", &line, &error))
   {
     return 1;

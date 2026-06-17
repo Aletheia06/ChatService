@@ -3,6 +3,7 @@
 
 #include <QAbstractSocket>
 #include <QByteArray>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QObject>
 #include <QTcpSocket>
@@ -30,6 +31,8 @@ class ChatClient : public QObject
   void joinRoom(const QString& room);
   void leaveRoom(const QString& room);
   void sendRoomMessage(const QString& room, const QString& message);
+  void requestPrivateHistory(const QString& peer, int limit);
+  void requestRoomHistory(const QString& room, int limit);
 
  signals:
   void connected();
@@ -40,8 +43,10 @@ class ChatClient : public QObject
   void infoMessage(const QString& message);
   void errorMessage(const QString& message);
   void usersUpdated(const QStringList& users);
-  void privateMessageReceived(const QString& from, const QString& message);
-  void roomMessageReceived(const QString& room, const QString& from, const QString& message);
+  void privateMessageReceived(const QString& from, const QString& message, qint64 id, qint64 createdAt);
+  void roomMessageReceived(const QString& room, const QString& from, const QString& message, qint64 id, qint64 createdAt);
+  void privateHistoryReceived(const QString& peer, const QJsonArray& messages);
+  void roomHistoryReceived(const QString& room, const QJsonArray& messages);
 
  private slots:
   void onConnected();

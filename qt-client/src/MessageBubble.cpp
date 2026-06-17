@@ -9,6 +9,7 @@ MessageBubble::MessageBubble(const QString& sender,
                              const QString& message,
                              const QString& room,
                              Kind kind,
+                             qint64 createdAt,
                              QWidget* parent)
   : QWidget(parent),
     senderLabel_(nullptr),
@@ -41,7 +42,10 @@ MessageBubble::MessageBubble(const QString& sender,
   messageLabel_->setTextInteractionFlags(Qt::TextSelectableByMouse);
   messageLabel_->setWordWrap(true);
 
-  timeLabel_ = new QLabel(QDateTime::currentDateTime().toString("HH:mm"), this);
+  const QDateTime timestamp =
+      createdAt > 0 ? QDateTime::fromSecsSinceEpoch(createdAt).toLocalTime()
+                    : QDateTime::currentDateTime();
+  timeLabel_ = new QLabel(timestamp.toString("MM-dd HH:mm"), this);
   timeLabel_->setObjectName("messageBubbleTime");
   timeLabel_->setProperty("bubbleKind", kindValue);
   timeLabel_->setAlignment(Qt::AlignRight);

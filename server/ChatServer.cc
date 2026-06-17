@@ -26,6 +26,9 @@ namespace chatservice
 namespace
 {
 
+const int kDefaultHistoryLimit = 50;
+const int kMaxHistoryLimit = 500;
+
 ChatSessionPtr sessionFromConnection(
     const muduo::net::TcpConnectionPtr& connection)
 {
@@ -38,6 +41,150 @@ ChatSessionPtr sessionFromConnection(
   return *session;
 }
 
+std::string int64ToString(int64_t value)
+{
+  std::ostringstream stream;
+  stream << value;
+  return stream.str();
+}
+
+int64_t currentTimeSeconds()
+{
+  return muduo::Timestamp::now().microSecondsSinceEpoch() / 1000000;
+}
+
+int parseHistoryLimit(const std::string& value)
+{
+  if (value.empty())
+  {
+    return kDefaultHistoryLimit;
+  }
+
+  char* end = NULL;
+  const long parsed = strtol(value.c_str(), &end, 10);
+  if (end == value.c_str() || parsed <= 0)
+  {
+    return kDefaultHistoryLimit;
+  }
+  if (parsed > kMaxHistoryLimit)
+  {
+    return kMaxHistoryLimit;
+  }
+  return static_cast<int>(parsed);
+}
+
+int64_t parseBeforeTimestamp(const std::string& value)
+{
+  if (value.empty())
+  {
+    return 0;
+  }
+
+  char* end = NULL;
+  const int64_t parsed = strtoll(value.c_str(), &end, 10);
+  if (end == value.c_str() || parsed <= 0)
+  {
+    return 0;
+  }
+  return parsed;
+}
+
+void appendJsonStringField(std::ostringstream* stream,
+                           const std::string& key,
+                           const std::string& value,
+                           bool* first)
+{
+  if (!*first)
+  {
+    *stream << ",";
+  }
+  *first = false;
+  *stream << "\"" << escapeJsonString(key) << "\":"
+          << "\"" << escapeJsonString(value) << "\"";
+}
+
+void appendJsonIntField(std::ostringstream* stream,
+                        const std::string& key,
+                        int64_t value,
+                        bool* first)
+{
+  if (!*first)
+  {
+    *stream << ",";
+  }
+  *first = false;
+  *stream << "\"" << escapeJsonString(key) << "\":" << value;
+}
+
+void appendPrivateMessageJson(std::ostringstream* stream,
+                              const Message& message)
+{
+  *stream << "{";
+  bool first = true;
+  appendJsonIntField(stream, "id", message.id, &first);
+  appendJsonStringField(stream, "sender", message.sender, &first);
+  appendJsonStringField(stream, "receiver", message.receiver, &first);
+  appendJsonStringField(stream, "content", message.content, &first);
+  appendJsonIntField(stream, "created_at", message.createdAt, &first);
+  *stream << "}";
+}
+
+void appendRoomMessageJson(std::ostringstream* stream,
+                           const Message& message)
+{
+  *stream << "{";
+  bool first = true;
+  appendJsonIntField(stream, "id", message.id, &first);
+  appendJsonStringField(stream, "sender", message.sender, &first);
+  appendJsonStringField(stream, "room", message.roomId, &first);
+  appendJsonStringField(stream, "content", message.content, &first);
+  appendJsonIntField(stream, "created_at", message.createdAt, &first);
+  *stream << "}";
+}
+
+std::string buildPrivateHistoryResponse(
+    const std::string& peer,
+    const std::vector<Message>& messages)
+{
+  std::ostringstream stream;
+  stream << "{";
+  bool first = true;
+  appendJsonStringField(&stream, "type", "history_private_result", &first);
+  appendJsonStringField(&stream, "peer", peer, &first);
+  stream << ",\"messages\":[";
+  for (std::size_t i = 0; i < messages.size(); ++i)
+  {
+    if (i != 0)
+    {
+      stream << ",";
+    }
+    appendPrivateMessageJson(&stream, messages[i]);
+  }
+  stream << "]}\n";
+  return stream.str();
+}
+
+std::string buildRoomHistoryResponse(const std::string& room,
+                                     const std::vector<Message>& messages)
+{
+  std::ostringstream stream;
+  stream << "{";
+  bool first = true;
+  appendJsonStringField(&stream, "type", "history_room_result", &first);
+  appendJsonStringField(&stream, "room", room, &first);
+  stream << ",\"messages\":[";
+  for (std::size_t i = 0; i < messages.size(); ++i)
+  {
+    if (i != 0)
+    {
+      stream << ",";
+    }
+    appendRoomMessageJson(&stream, messages[i]);
+  }
+  stream << "]}\n";
+  return stream.str();
+}
+
 }  // namespace
 
 ChatServer::ChatServer(muduo::net::EventLoop* loop,
@@ -46,6 +193,7 @@ ChatServer::ChatServer(muduo::net::EventLoop* loop,
     server_(loop, listenAddr, kServerName),
     userManager_(),
     roomManager_(),
+    storage_(),
     metrics_()
 {
   server_.setThreadNum(kWorkerThreadCount);
@@ -55,6 +203,11 @@ ChatServer::ChatServer(muduo::net::EventLoop* loop,
       std::bind(&ChatServer::onMessage, this, _1, _2, _3));
   loop_->runEvery(kMetricsIntervalSeconds,
                   std::bind(&ChatServer::printPerformanceStats, this));
+}
+
+bool ChatServer::initStorage(const std::string& dbPath)
+{
+  return storage_.init(dbPath);
 }
 
 void ChatServer::start()
@@ -132,20 +285,43 @@ void ChatServer::sendPrivate(const ChatSessionPtr& session,
     return;
   }
 
-  const muduo::net::TcpConnectionPtr targetConnection =
-      userManager_.find(target);
-  if (!targetConnection)
+  const int64_t createdAt = currentTimeSeconds();
+  int64_t messageId = 0;
+  if (!storage_.savePrivateMessage(from,
+                                   target,
+                                   message,
+                                   createdAt,
+                                   &messageId))
   {
-    session->sendJson(makeErrorResponse("target user is not online"));
+    session->sendJson(makeErrorResponse("failed to save private message"));
     return;
   }
 
-  JsonObject event;
-  event["type"] = "private";
-  event["from"] = from;
-  event["message"] = message;
-  targetConnection->send(makeJsonLine(event));
-  session->sendJson(makeOkResponse("private message sent"));
+  const muduo::net::TcpConnectionPtr targetConnection =
+      userManager_.find(target);
+  if (targetConnection)
+  {
+    JsonObject event;
+    event["type"] = "private";
+    event["from"] = from;
+    event["message"] = message;
+    event["id"] = int64ToString(messageId);
+    event["created_at"] = int64ToString(createdAt);
+    targetConnection->send(makeJsonLine(event));
+    JsonObject response = makeOkResponse("private message sent");
+    response["target"] = target;
+    response["id"] = int64ToString(messageId);
+    response["created_at"] = int64ToString(createdAt);
+    session->sendJson(response);
+  }
+  else
+  {
+    JsonObject response = makeOkResponse("private message saved");
+    response["target"] = target;
+    response["id"] = int64ToString(messageId);
+    response["created_at"] = int64ToString(createdAt);
+    session->sendJson(response);
+  }
 }
 
 void ChatServer::createRoom(const ChatSessionPtr& session,
@@ -225,11 +401,25 @@ void ChatServer::sendRoomMessage(const ChatSessionPtr& session,
     return;
   }
 
+  const int64_t createdAt = currentTimeSeconds();
+  int64_t messageId = 0;
+  if (!storage_.saveRoomMessage(room,
+                                username,
+                                message,
+                                createdAt,
+                                &messageId))
+  {
+    session->sendJson(makeErrorResponse("failed to save room message"));
+    return;
+  }
+
   JsonObject event;
   event["type"] = "room";
   event["room"] = room;
   event["from"] = username;
   event["message"] = message;
+  event["id"] = int64ToString(messageId);
+  event["created_at"] = int64ToString(createdAt);
 
   const std::string eventLine = makeJsonLine(event);
   const std::vector<muduo::net::TcpConnectionPtr> connections =
@@ -244,6 +434,53 @@ void ChatServer::sendRoomMessage(const ChatSessionPtr& session,
       (*it)->send(eventLine);
     }
   }
+}
+
+void ChatServer::sendPrivateHistory(const ChatSessionPtr& session,
+                                    const std::string& peer,
+                                    const std::string& limitText,
+                                    const std::string& beforeText)
+{
+  std::string username;
+  if (!requireLoggedIn(session, &username))
+  {
+    return;
+  }
+  if (!isValidName(peer))
+  {
+    session->sendJson(makeErrorResponse("invalid peer username"));
+    return;
+  }
+
+  const std::vector<Message> messages =
+      storage_.loadPrivateHistory(username,
+                                  peer,
+                                  parseHistoryLimit(limitText),
+                                  parseBeforeTimestamp(beforeText));
+  session->connection()->send(buildPrivateHistoryResponse(peer, messages));
+}
+
+void ChatServer::sendRoomHistory(const ChatSessionPtr& session,
+                                 const std::string& room,
+                                 const std::string& limitText,
+                                 const std::string& beforeText)
+{
+  std::string username;
+  if (!requireLoggedIn(session, &username))
+  {
+    return;
+  }
+  if (!isValidName(room))
+  {
+    session->sendJson(makeErrorResponse("invalid room name"));
+    return;
+  }
+
+  const std::vector<Message> messages =
+      storage_.loadRoomHistory(room,
+                               parseHistoryLimit(limitText),
+                               parseBeforeTimestamp(beforeText));
+  session->connection()->send(buildRoomHistoryResponse(room, messages));
 }
 
 void ChatServer::onConnection(const muduo::net::TcpConnectionPtr& connection)

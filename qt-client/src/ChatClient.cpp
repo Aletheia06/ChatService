@@ -3,7 +3,9 @@
 #include "Protocol.h"
 
 #include <QDebug>
+#include <QJsonArray>
 #include <QJsonObject>
+#include <QJsonValue>
 
 ChatClient::ChatClient(QObject* parent)
   : QObject(parent),
@@ -88,6 +90,16 @@ void ChatClient::leaveRoom(const QString& room)
 void ChatClient::sendRoomMessage(const QString& room, const QString& message)
 {
   sendLine(Protocol::buildRoomMessage(room, message));
+}
+
+void ChatClient::requestPrivateHistory(const QString& peer, int limit)
+{
+  sendLine(Protocol::buildPrivateHistoryRequest(peer, limit));
+}
+
+void ChatClient::requestRoomHistory(const QString& room, int limit)
+{
+  sendLine(Protocol::buildRoomHistoryRequest(room, limit));
 }
 
 void ChatClient::onConnected()
@@ -204,8 +216,10 @@ void ChatClient::handleObject(const QJsonObject& object)
   {
     const QString from = Protocol::stringValue(object, "from");
     const QString message = Protocol::stringValue(object, "message");
+    const qint64 id = Protocol::int64Value(object, "id");
+    const qint64 createdAt = Protocol::int64Value(object, "created_at");
     qDebug() << "ChatClient received private event from:" << from;
-    emit privateMessageReceived(from, message);
+    emit privateMessageReceived(from, message, id, createdAt);
     return;
   }
 
@@ -213,7 +227,35 @@ void ChatClient::handleObject(const QJsonObject& object)
   {
     emit roomMessageReceived(Protocol::stringValue(object, "room"),
                              Protocol::stringValue(object, "from"),
-                             Protocol::stringValue(object, "message"));
+                             Protocol::stringValue(object, "message"),
+                             Protocol::int64Value(object, "id"),
+                             Protocol::int64Value(object, "created_at"));
+    return;
+  }
+
+  if (type == "history_private_result")
+  {
+    const QJsonValue messages = object.value("messages");
+    if (!messages.isArray())
+    {
+      emit errorMessage("Invalid private history response");
+      return;
+    }
+    emit privateHistoryReceived(Protocol::stringValue(object, "peer"),
+                                messages.toArray());
+    return;
+  }
+
+  if (type == "history_room_result")
+  {
+    const QJsonValue messages = object.value("messages");
+    if (!messages.isArray())
+    {
+      emit errorMessage("Invalid room history response");
+      return;
+    }
+    emit roomHistoryReceived(Protocol::stringValue(object, "room"),
+                             messages.toArray());
     return;
   }
 

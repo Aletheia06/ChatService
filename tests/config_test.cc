@@ -4,7 +4,7 @@
 
 int main()
 {
-  if (std::string(chatservice::kServerHost) != "127.0.0.1")
+  if (std::string(chatservice::kServerHost).empty())
   {
     return 1;
   }

@@ -8,15 +8,17 @@ The server and client speak a simple line-delimited JSON protocol: each TCP mess
 
 - `server/ChatServer.*` integrates muduo `EventLoop` and `TcpServer`, configures the worker event-loop pool, owns connection lifecycle, and routes requests.
 - `server/ChatSession.*` stores per-connection state, including the logged-in username.
+- `server/ChatStorage.*` owns SQLite persistence, history queries, and JSON history export.
 - `server/UserManager.*` maintains the thread-safe online user map and supports one-lock connection snapshots for broadcasts.
 - `server/RoomManager.*` maintains thread-safe room membership and returns member-name snapshots.
 - `server/ServerMetrics.*` records online users, message rate, average latency, total connections, and dropped connections.
 - `client/` contains the muduo `TcpClient` wrapper and an interactive command-line client.
+- `qt-client/` contains the Qt 6 Widgets GUI client.
 - `common/Json.*` implements the small JSON object parser and serializer used by the wire protocol.
 - `common/Protocol.*` translates CLI commands into JSON requests and attaches client send timestamps for latency measurement.
 - `tests/` contains focused CTest checks for configuration and protocol behavior.
 
-The server listens on `127.0.0.1:8888`. Multiple clients can connect at the same time. A client must login before private chat or room operations.
+The server binds to `chatservice::kServerHost:chatservice::kServerPort` from `common/Config.h`. Public deployments can bind the server to `0.0.0.0`; keep that separate from the Qt client's default connection host in `qt-client/src/ClientConfig.h`.
 
 ## Directory Structure
 
@@ -39,6 +41,8 @@ ChatService/
 |   |-- ChatServer.h
 |   |-- ChatSession.cc
 |   |-- ChatSession.h
+|   |-- ChatStorage.cc
+|   |-- ChatStorage.h
 |   |-- RoomManager.cc
 |   |-- RoomManager.h
 |   |-- ServerMetrics.cc
@@ -52,12 +56,13 @@ ChatService/
 |   `-- protocol_test.cc
 |-- tools/
 |   `-- StressClient.cc
+|-- qt-client/
 `-- muduo/
 ```
 
 ## JSON Protocol
 
-Requests and responses are JSON objects with string fields only.
+Requests and responses are line-delimited JSON objects. Existing request fields remain string-compatible; the server also accepts numeric scalar fields for history limits and timestamps.
 
 Login:
 
@@ -83,6 +88,8 @@ Private message:
 {"type":"private","target":"alice","message":"hello"}
 ```
 
+Private messages are stored even if the receiver is offline. If the receiver is online, the server also delivers a live event.
+
 Create and use rooms:
 
 ```json
@@ -92,15 +99,24 @@ Create and use rooms:
 {"type":"room_msg","room":"lobby","message":"hello everyone"}
 ```
 
+Load private or room history:
+
+```json
+{"type":"history_private","peer":"alice","limit":50}
+{"type":"history_room","room":"lobby","limit":50}
+```
+
 The command-line client adds a `sent_at_us` field to generated JSON requests. The server uses it for end-to-end latency. Raw JSON clients may also include that field.
 
 Server responses use JSON too:
 
 ```json
 {"type":"ok","message":"logged in as alice"}
-{"type":"error","message":"target user is not online"}
-{"type":"private","from":"bob","message":"hello"}
-{"type":"room","room":"lobby","from":"alice","message":"hello everyone"}
+{"type":"ok","message":"private message saved","target":"bob","id":"12","created_at":"1710000000"}
+{"type":"private","from":"bob","message":"hello","id":"13","created_at":"1710000001"}
+{"type":"room","room":"lobby","from":"alice","message":"hello everyone","id":"14","created_at":"1710000002"}
+{"type":"history_private_result","peer":"alice","messages":[{"id":1,"sender":"alice","receiver":"bob","content":"hello","created_at":1710000000}]}
+{"type":"history_room_result","room":"lobby","messages":[{"id":2,"sender":"alice","room":"lobby","content":"hello everyone","created_at":1710000000}]}
 ```
 
 ## Client Commands
@@ -116,6 +132,8 @@ CREATE_ROOM room_name
 JOIN room_name
 LEAVE room_name
 ROOM_MSG room_name message
+HISTORY_PRIVATE peer [limit]
+HISTORY_ROOM room [limit]
 ```
 
 You can also paste a raw JSON request that follows the protocol.
@@ -176,12 +194,45 @@ Stage 2 addresses those points with muduo worker loops, connection-context sessi
 
 ## Build
 
-This muduo tree is Linux-oriented, so build this project on Linux or WSL.
+This muduo tree is Linux-oriented, so build the server and CLI tools on Linux or WSL. Install CMake, compiler tools, Boost headers, and SQLite development headers first, for example `sudo apt install cmake build-essential libboost-dev sqlite3 libsqlite3-dev` on Ubuntu-like systems.
 
 ```sh
 cmake -S . -B build-stage2 -DCMAKE_BUILD_TYPE=Debug
 cmake --build build-stage2
 ctest --test-dir build-stage2 --output-on-failure
+```
+
+Build the Qt GUI client separately with Qt 6:
+
+```sh
+cmake -S qt-client -B build-qt-client -DCMAKE_BUILD_TYPE=Release
+cmake --build build-qt-client
+```
+
+On Windows, pass your Qt install path if CMake cannot find it:
+
+```bat
+cmake -S qt-client -B build-qt-client -DCMAKE_PREFIX_PATH=C:\Qt\6.7.0\msvc2019_64
+cmake --build build-qt-client --config Release
+```
+
+## SQLite Persistence
+
+The server stores private and room messages in SQLite through `server/ChatStorage.*`. The default database path is `chat_history.sqlite3` relative to the server process working directory.
+
+You can change the database path with either:
+
+```sh
+CHATSERVICE_DB_PATH=/var/lib/chatservice/chat_history.sqlite3 ./build-stage2/bin/chat_server
+./build-stage2/bin/chat_server --db /var/lib/chatservice/chat_history.sqlite3
+```
+
+SQLite WAL mode and `synchronous=NORMAL` are enabled at startup. Private conversations use normalized ids in the form `private:min_user:max_user`, so `alice` to `bob` and `bob` to `alice` load the same history thread.
+
+For a safe offline export, stop the server or point at a stable database copy, then run:
+
+```sh
+./build-stage2/bin/chat_server --db chat_history.sqlite3 --dump-history history_dump.json
 ```
 
 ## Stress Test
@@ -227,6 +278,8 @@ Start one or more clients in other terminals:
 ```sh
 ./build-stage2/bin/chat_client
 ```
+
+The Qt GUI client defaults to `47.109.187.23:8888` from `qt-client/src/ClientConfig.h`. The login page hides host and port by default; use Advanced Settings to override them.
 
 Example session:
 

@@ -13,6 +13,7 @@ add_executable(chat_gui_client
   src/main.cpp
   src/AppStyle.h
   src/AppStyle.cpp
+  src/ClientConfig.h
   src/Protocol.h
   src/Protocol.cpp
   src/ChatClient.h

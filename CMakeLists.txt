@@ -13,6 +13,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 option(MUDUO_BUILD_EXAMPLES "Build muduo examples" OFF)
 option(CHATSERVICE_BUILD_TESTS "Build ChatService tests" ON)
 
+find_package(SQLite3 REQUIRED)
+
 add_subdirectory(muduo)
 
 add_library(chat_common
@@ -27,12 +29,13 @@ target_include_directories(chat_common PUBLIC
 add_executable(chat_server
   server/ChatServer.cc
   server/ChatSession.cc
+  server/ChatStorage.cc
   server/RoomManager.cc
   server/ServerMetrics.cc
   server/UserManager.cc
   server/main.cc
 )
-target_link_libraries(chat_server PRIVATE chat_common muduo_net)
+target_link_libraries(chat_server PRIVATE chat_common muduo_net SQLite::SQLite3)
 
 add_executable(chat_client
   client/ChatClient.cc

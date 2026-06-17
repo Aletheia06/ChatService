@@ -295,6 +295,54 @@ bool buildRequestFromCommand(const std::string& line,
     return finishObject(object, jsonLine);
   }
 
+  if (command == "HISTORY_PRIVATE")
+  {
+    std::string peer;
+    if (!readToken(trimmed, &pos, &peer))
+    {
+      *error = "usage: HISTORY_PRIVATE peer [limit]";
+      return false;
+    }
+
+    object["type"] = "history_private";
+    object["peer"] = peer;
+    std::string limit;
+    if (readToken(trimmed, &pos, &limit))
+    {
+      object["limit"] = limit;
+    }
+    if (hasExtraText(trimmed, pos))
+    {
+      *error = "usage: HISTORY_PRIVATE peer [limit]";
+      return false;
+    }
+    return finishObject(object, jsonLine);
+  }
+
+  if (command == "HISTORY_ROOM")
+  {
+    std::string room;
+    if (!readToken(trimmed, &pos, &room))
+    {
+      *error = "usage: HISTORY_ROOM room [limit]";
+      return false;
+    }
+
+    object["type"] = "history_room";
+    object["room"] = room;
+    std::string limit;
+    if (readToken(trimmed, &pos, &limit))
+    {
+      object["limit"] = limit;
+    }
+    if (hasExtraText(trimmed, pos))
+    {
+      *error = "usage: HISTORY_ROOM room [limit]";
+      return false;
+    }
+    return finishObject(object, jsonLine);
+  }
+
   *error = "unknown command";
   return false;
 }

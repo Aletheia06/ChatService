@@ -10,6 +10,7 @@ class QLineEdit;
 class MainWindow;
 class QPushButton;
 class QSpinBox;
+class QWidget;
 
 class LoginWindow : public QWidget
 {
@@ -27,6 +28,7 @@ class LoginWindow : public QWidget
   void onConnectionError(const QString& message);
   void onDisconnected();
   void setStatus(const QString& message);
+  void toggleAdvancedSettings(bool checked);
 
  private:
   void buildUi();
@@ -35,6 +37,8 @@ class LoginWindow : public QWidget
   QLineEdit* hostEdit_;
   QSpinBox* portSpinBox_;
   QLineEdit* usernameEdit_;
+  QPushButton* advancedButton_;
+  QWidget* advancedPanel_;
   QPushButton* loginButton_;
   QLabel* statusLabel_;
   ChatClient* client_;
