@@ -11,6 +11,7 @@
 
 #include <boost/any.hpp>
 
+#include <cctype>
 #include <cstdlib>
 #include <functional>
 #include <stdio.h>
@@ -45,6 +46,100 @@ std::string int64ToString(int64_t value)
 {
   std::ostringstream stream;
   stream << value;
+  return stream.str();
+}
+
+std::string fieldOrEmpty(const JsonObject& object, const std::string& key)
+{
+  const JsonObject::const_iterator it = object.find(key);
+  return it == object.end() ? std::string() : it->second;
+}
+
+bool isValidCallId(const std::string& callId)
+{
+  if (callId.empty() || callId.size() > 128)
+  {
+    return false;
+  }
+
+  for (std::string::const_iterator it = callId.begin();
+       it != callId.end();
+       ++it)
+  {
+    const unsigned char ch = static_cast<unsigned char>(*it);
+    if (isalnum(ch) == 0 && *it != '_' && *it != '-' && *it != '.')
+    {
+      return false;
+    }
+  }
+  return true;
+}
+
+JsonObject makeCallError(const std::string& username,
+                         const std::string& callId,
+                         const std::string& reason)
+{
+  JsonObject response;
+  response["type"] = "call_error";
+  response["from"] = "server";
+  response["to"] = username;
+  response["call_id"] = callId;
+  response["reason"] = reason;
+  return response;
+}
+
+JsonObject makeCallBusy(const std::string& username,
+                        const std::string& callId,
+                        const std::string& reason)
+{
+  JsonObject response;
+  response["type"] = "call_busy";
+  response["from"] = "server";
+  response["to"] = username;
+  response["call_id"] = callId;
+  response["reason"] = reason;
+  return response;
+}
+
+JsonObject makeCallEvent(const std::string& type,
+                         const std::string& from,
+                         const std::string& to,
+                         const std::string& callId,
+                         const std::string& reason)
+{
+  JsonObject event;
+  event["type"] = type;
+  event["from"] = from;
+  event["to"] = to;
+  event["call_id"] = callId;
+  if (!reason.empty())
+  {
+    event["reason"] = reason;
+  }
+  return event;
+}
+
+void appendJsonStringField(std::ostringstream* stream,
+                           const std::string& key,
+                           const std::string& value,
+                           bool* first);
+
+std::string buildSignalingEvent(const std::string& type,
+                                const std::string& from,
+                                const std::string& to,
+                                const std::string& callId,
+                                const std::string& payloadName,
+                                const std::string& rawPayload)
+{
+  std::ostringstream stream;
+  stream << "{";
+  bool first = true;
+  appendJsonStringField(&stream, "type", type, &first);
+  appendJsonStringField(&stream, "from", from, &first);
+  appendJsonStringField(&stream, "to", to, &first);
+  appendJsonStringField(&stream, "call_id", callId, &first);
+  stream << ",\"" << escapeJsonString(payloadName) << "\":" << rawPayload;
+  stream << "}\n";
   return stream.str();
 }
 
@@ -193,6 +288,7 @@ ChatServer::ChatServer(muduo::net::EventLoop* loop,
     server_(loop, listenAddr, kServerName),
     userManager_(),
     roomManager_(),
+    callManager_(),
     storage_(),
     metrics_()
 {
@@ -245,6 +341,32 @@ void ChatServer::logout(const ChatSessionPtr& session, bool notifyClient)
       session->sendJson(makeErrorResponse("session is not logged in"));
     }
     return;
+  }
+
+  CallDisconnectEvent callEvent;
+  if (callManager_.removeUser(username, &callEvent))
+  {
+    std::string type = "call_hangup";
+    if (callEvent.disconnectedState == kCallCalling)
+    {
+      type = "call_cancel";
+    }
+    else if (callEvent.disconnectedState == kCallRinging)
+    {
+      type = "call_reject";
+    }
+
+    const muduo::net::TcpConnectionPtr peerConnection =
+        userManager_.find(callEvent.peer);
+    if (peerConnection)
+    {
+      peerConnection->send(makeJsonLine(
+          makeCallEvent(type,
+                        username,
+                        callEvent.peer,
+                        callEvent.callId,
+                        "peer_disconnected")));
+    }
   }
 
   roomManager_.leaveAll(username);
@@ -481,6 +603,196 @@ void ChatServer::sendRoomHistory(const ChatSessionPtr& session,
                                parseHistoryLimit(limitText),
                                parseBeforeTimestamp(beforeText));
   session->connection()->send(buildRoomHistoryResponse(room, messages));
+}
+
+void ChatServer::handleCallRequest(const ChatSessionPtr& session,
+                                   const JsonObject& request)
+{
+  std::string username;
+  if (!requireLoggedIn(session, &username))
+  {
+    return;
+  }
+
+  const std::string type = fieldOrEmpty(request, "type");
+  const std::string target = fieldOrEmpty(request, "to");
+  const std::string callId = fieldOrEmpty(request, "call_id");
+
+  if (!isValidName(target))
+  {
+    session->sendJson(makeCallError(username,
+                                    callId,
+                                    "invalid_target"));
+    return;
+  }
+  if (!isValidCallId(callId))
+  {
+    session->sendJson(makeCallError(username,
+                                    callId,
+                                    "invalid_call_id"));
+    return;
+  }
+  if (target == username)
+  {
+    session->sendJson(makeCallError(username,
+                                    callId,
+                                    "cannot_call_self"));
+    return;
+  }
+
+  if (type == "call_invite")
+  {
+    if (fieldOrEmpty(request, "media") != "video")
+    {
+      session->sendJson(makeCallError(username,
+                                      callId,
+                                      "unsupported_media"));
+      return;
+    }
+
+    muduo::net::TcpConnectionPtr targetConnection =
+        userManager_.find(target);
+    if (!targetConnection)
+    {
+      session->sendJson(makeCallError(username,
+                                      callId,
+                                      "target_offline"));
+      return;
+    }
+
+    std::string reason;
+    if (!callManager_.startCall(username, target, callId, &reason))
+    {
+      if (reason == "caller_busy" || reason == "target_busy")
+      {
+        session->sendJson(makeCallBusy(username, callId, reason));
+      }
+      else
+      {
+        session->sendJson(makeCallError(username, callId, reason));
+      }
+      return;
+    }
+
+    targetConnection = userManager_.find(target);
+    if (!targetConnection)
+    {
+      callManager_.cancelCall(username, target, callId, &reason);
+      session->sendJson(makeCallError(username,
+                                      callId,
+                                      "target_offline"));
+      return;
+    }
+
+    JsonObject event = makeCallEvent(type,
+                                     username,
+                                     target,
+                                     callId,
+                                     std::string());
+    event["media"] = "video";
+    targetConnection->send(makeJsonLine(event));
+    return;
+  }
+
+  std::string reason;
+  bool valid = false;
+  if (type == "call_accept")
+  {
+    valid = callManager_.acceptCall(username, target, callId, &reason);
+  }
+  else if (type == "call_reject")
+  {
+    valid = callManager_.rejectCall(username, target, callId, &reason);
+  }
+  else if (type == "call_cancel")
+  {
+    valid = callManager_.cancelCall(username, target, callId, &reason);
+  }
+  else if (type == "call_timeout")
+  {
+    valid = callManager_.timeoutCall(username, target, callId, &reason);
+  }
+  else if (type == "call_hangup")
+  {
+    valid = callManager_.hangupCall(username, target, callId, &reason);
+  }
+  else if (type == "webrtc_offer" ||
+           type == "webrtc_answer" ||
+           type == "ice_candidate")
+  {
+    const std::string payloadName =
+        type == "ice_candidate" ? "candidate" : "sdp";
+    const std::string rawPayload = fieldOrEmpty(request, payloadName);
+    if (rawPayload.empty() || rawPayload[0] != '{')
+    {
+      session->sendJson(makeCallError(username,
+                                      callId,
+                                      "invalid_signaling_payload"));
+      return;
+    }
+    if (!callManager_.validateSignaling(username,
+                                        target,
+                                        callId,
+                                        type,
+                                        &reason))
+    {
+      session->sendJson(makeCallError(username, callId, reason));
+      return;
+    }
+
+    const muduo::net::TcpConnectionPtr targetConnection =
+        userManager_.find(target);
+    if (!targetConnection)
+    {
+      callManager_.hangupCall(username, target, callId, &reason);
+      session->sendJson(makeCallError(username,
+                                      callId,
+                                      "target_offline"));
+      return;
+    }
+
+    targetConnection->send(buildSignalingEvent(type,
+                                               username,
+                                               target,
+                                               callId,
+                                               payloadName,
+                                               rawPayload));
+    return;
+  }
+
+  if (!valid)
+  {
+    session->sendJson(makeCallError(username, callId, reason));
+    return;
+  }
+
+  const muduo::net::TcpConnectionPtr targetConnection =
+      userManager_.find(target);
+  if (targetConnection)
+  {
+    std::string eventReason;
+    if (type == "call_reject")
+    {
+      eventReason = fieldOrEmpty(request, "reason");
+      if (eventReason.empty())
+      {
+        eventReason = "rejected";
+      }
+    }
+    else if (type == "call_timeout")
+    {
+      eventReason = "timeout";
+    }
+    targetConnection->send(makeJsonLine(
+        makeCallEvent(type, username, target, callId, eventReason)));
+  }
+  else if (type == "call_accept")
+  {
+    callManager_.hangupCall(username, target, callId, &reason);
+    session->sendJson(makeCallError(username,
+                                    callId,
+                                    "target_offline"));
+  }
 }
 
 void ChatServer::onConnection(const muduo::net::TcpConnectionPtr& connection)

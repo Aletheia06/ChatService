@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Chat Login</title>
+    <link rel="stylesheet" href="style.css">
+  </head>
+  <body>
+    <section id="loginView" class="login-view" aria-labelledby="loginTitle">
+      <form id="loginForm" class="login-window">
+        <h1 id="loginTitle" class="app-title">Chat Login</h1>
+
+        <label class="form-row">
+          <span>Username</span>
+          <input id="usernameInput" type="text" placeholder="alice" autocomplete="username" maxlength="32">
+        </label>
+
+        <div id="advancedPanel" class="advanced-panel" hidden>
+          <label class="form-row">
+            <span>Gateway</span>
+            <input id="gatewayUrl" type="url" autocomplete="off">
+          </label>
+        </div>
+
+        <div class="login-actions">
+          <button id="advancedButton" class="secondary-button" type="button" aria-expanded="false">Advanced Settings</button>
+          <button id="loginButton" type="submit">Login</button>
+        </div>
+
+        <div id="loginStatus" class="status-pill">Enter username.</div>
+      </form>
+    </section>
+
+    <section id="mainView" class="app-shell" hidden aria-label="Chat Client">
+      <aside class="sidebar">
+        <section class="sidebar-section">
+          <h2 class="section-label">Current User</h2>
+          <div id="currentUserLabel" class="current-user"></div>
+          <div id="connectionStatus" class="connection-status disconnected">Disconnected</div>
+        </section>
+
+        <section class="sidebar-section list-section online-section">
+          <h2 class="section-label">Online Users</h2>
+          <div id="usersList" class="qt-list" role="listbox" aria-label="Online Users"></div>
+          <button id="refreshUsersButton" class="secondary-button wide-button" type="button">Refresh Users</button>
+        </section>
+
+        <section class="sidebar-section list-section rooms-section">
+          <h2 class="section-label">Rooms</h2>
+          <div id="roomsList" class="qt-list" role="listbox" aria-label="Rooms"></div>
+          <button id="createRoomButton" class="secondary-button wide-button" type="button">Create Room</button>
+          <button id="joinRoomButton" class="secondary-button wide-button" type="button">Join Room</button>
+          <button id="leaveRoomButton" class="secondary-button wide-button" type="button">Leave Room</button>
+        </section>
+
+        <section class="sidebar-section list-section recent-section">
+          <h2 class="section-label">Recent Conversations</h2>
+          <div id="recentList" class="qt-list" role="listbox" aria-label="Recent Conversations"></div>
+        </section>
+      </aside>
+
+      <main class="chat-panel">
+        <h1 id="chatTitle" class="chat-title">Select a user or room</h1>
+        <section id="messages" class="message-scroll" aria-live="polite"></section>
+        <form id="messageForm" class="message-input-row">
+          <input id="messageInput" type="text" placeholder="Type a message..." autocomplete="off" disabled>
+          <button id="sendButton" type="submit" disabled>Send</button>
+        </form>
+        <div id="actionStatus" class="status-pill action-status">Select a conversation.</div>
+      </main>
+    </section>
+
+    <div id="roomDialog" class="dialog-backdrop" hidden>
+      <form id="roomDialogForm" class="room-dialog" role="dialog" aria-modal="true" aria-labelledby="roomDialogTitle">
+        <h2 id="roomDialogTitle">Room name</h2>
+        <input id="roomDialogInput" type="text" maxlength="32" autocomplete="off">
+        <div class="dialog-actions">
+          <button id="roomDialogCancel" class="secondary-button" type="button">Cancel</button>
+          <button id="roomDialogSubmit" type="submit">OK</button>
+        </div>
+      </form>
+    </div>
+
+    <div id="callDialog" class="dialog-backdrop call-backdrop" hidden>
+      <section class="call-dialog" role="dialog" aria-modal="true" aria-labelledby="callDialogTitle">
+        <div class="call-heading">
+          <div>
+            <div class="call-kicker">One-to-one video call</div>
+            <h2 id="callDialogTitle">Video call</h2>
+          </div>
+          <div id="callPeerLabel" class="call-peer"></div>
+        </div>
+
+        <div id="callVideoStage" class="call-video-stage" hidden>
+          <video id="remoteVideo" class="remote-video" autoplay playsinline></video>
+          <div class="remote-video-placeholder">Waiting for remote video...</div>
+          <video id="localVideo" class="local-video" autoplay muted playsinline></video>
+        </div>
+
+        <p id="callStatus" class="call-status">Preparing call...</p>
+
+        <div id="incomingCallActions" class="call-actions" hidden>
+          <button id="rejectCallButton" class="danger-button" type="button">Reject</button>
+          <button id="acceptCallButton" type="button">Accept</button>
+        </div>
+
+        <div id="outgoingCallActions" class="call-actions" hidden>
+          <button id="cancelCallButton" class="danger-button" type="button">Cancel</button>
+        </div>
+
+        <div id="activeCallActions" class="call-actions active-call-actions" hidden>
+          <button id="muteCallButton" class="secondary-button" type="button">Mute microphone</button>
+          <button id="cameraCallButton" class="secondary-button" type="button">Turn camera off</button>
+          <button id="hangupCallButton" class="danger-button" type="button">Hang up</button>
+        </div>
+
+        <div id="finishedCallActions" class="call-actions" hidden>
+          <button id="dismissCallButton" class="secondary-button" type="button">Close</button>
+        </div>
+      </section>
+    </div>
+
+    <script src="webrtc.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>

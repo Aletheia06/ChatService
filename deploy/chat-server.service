@@ -1,0 +1,17 @@
+[Unit]
+Description=ChatService muduo TCP server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/ChatService2.0/ChatService/build/bin
+Environment=CHATSERVICE_DB_PATH=/root/ChatService2.0/ChatService/build/bin/chat_history.sqlite3
+ExecStart=/root/ChatService2.0/ChatService/build/bin/chat_server
+Restart=on-failure
+RestartSec=3
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

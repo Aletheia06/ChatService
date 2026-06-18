@@ -14,6 +14,8 @@ option(MUDUO_BUILD_EXAMPLES "Build muduo examples" OFF)
 option(CHATSERVICE_BUILD_TESTS "Build ChatService tests" ON)
 
 find_package(SQLite3 REQUIRED)
+find_package(Boost REQUIRED)
+include_directories(SYSTEM ${Boost_INCLUDE_DIRS})
 
 add_subdirectory(muduo)
 
@@ -27,6 +29,7 @@ target_include_directories(chat_common PUBLIC
 )
 
 add_executable(chat_server
+  server/CallManager.cc
   server/ChatServer.cc
   server/ChatSession.cc
   server/ChatStorage.cc

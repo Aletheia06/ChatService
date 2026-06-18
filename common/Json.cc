@@ -218,6 +218,162 @@ bool parseJsonNumberAsString(const std::string& text,
   return true;
 }
 
+bool consumeJsonValue(const std::string& text,
+                      std::size_t* pos,
+                      std::string* error);
+
+bool consumeJsonLiteral(const std::string& text,
+                        std::size_t* pos,
+                        const std::string& literal,
+                        std::string* error)
+{
+  if (text.compare(*pos, literal.size(), literal) != 0)
+  {
+    *error = "invalid json literal";
+    return false;
+  }
+  *pos += literal.size();
+  return true;
+}
+
+bool consumeJsonArray(const std::string& text,
+                      std::size_t* pos,
+                      std::string* error)
+{
+  ++(*pos);
+  skipWhitespace(text, pos);
+  if (*pos < text.size() && text[*pos] == ']')
+  {
+    ++(*pos);
+    return true;
+  }
+
+  while (*pos < text.size())
+  {
+    if (!consumeJsonValue(text, pos, error))
+    {
+      return false;
+    }
+    skipWhitespace(text, pos);
+    if (*pos >= text.size())
+    {
+      *error = "unterminated array";
+      return false;
+    }
+    if (text[*pos] == ']')
+    {
+      ++(*pos);
+      return true;
+    }
+    if (text[*pos] != ',')
+    {
+      *error = "expected comma in array";
+      return false;
+    }
+    ++(*pos);
+    skipWhitespace(text, pos);
+  }
+
+  *error = "unterminated array";
+  return false;
+}
+
+bool consumeJsonObject(const std::string& text,
+                       std::size_t* pos,
+                       std::string* error)
+{
+  ++(*pos);
+  skipWhitespace(text, pos);
+  if (*pos < text.size() && text[*pos] == '}')
+  {
+    ++(*pos);
+    return true;
+  }
+
+  while (*pos < text.size())
+  {
+    std::string key;
+    if (!parseJsonString(text, pos, &key, error))
+    {
+      return false;
+    }
+    skipWhitespace(text, pos);
+    if (*pos >= text.size() || text[*pos] != ':')
+    {
+      *error = "expected colon in object";
+      return false;
+    }
+    ++(*pos);
+    skipWhitespace(text, pos);
+    if (!consumeJsonValue(text, pos, error))
+    {
+      return false;
+    }
+    skipWhitespace(text, pos);
+    if (*pos >= text.size())
+    {
+      *error = "unterminated object";
+      return false;
+    }
+    if (text[*pos] == '}')
+    {
+      ++(*pos);
+      return true;
+    }
+    if (text[*pos] != ',')
+    {
+      *error = "expected comma in object";
+      return false;
+    }
+    ++(*pos);
+    skipWhitespace(text, pos);
+  }
+
+  *error = "unterminated object";
+  return false;
+}
+
+bool consumeJsonValue(const std::string& text,
+                      std::size_t* pos,
+                      std::string* error)
+{
+  skipWhitespace(text, pos);
+  if (*pos >= text.size())
+  {
+    *error = "expected json value";
+    return false;
+  }
+
+  if (text[*pos] == '"')
+  {
+    std::string ignored;
+    return parseJsonString(text, pos, &ignored, error);
+  }
+  if (text[*pos] == '{')
+  {
+    return consumeJsonObject(text, pos, error);
+  }
+  if (text[*pos] == '[')
+  {
+    return consumeJsonArray(text, pos, error);
+  }
+  if (text[*pos] == 't')
+  {
+    return consumeJsonLiteral(text, pos, "true", error);
+  }
+  if (text[*pos] == 'f')
+  {
+    return consumeJsonLiteral(text, pos, "false", error);
+  }
+  if (text[*pos] == 'n')
+  {
+    return consumeJsonLiteral(text, pos, "null", error);
+  }
+
+  std::string ignored;
+  return parseJsonNumberAsString(text, pos, &ignored, error);
+}
+
 bool parseJsonValueAsString(const std::string& text,
                             std::size_t* pos,
                             std::string* output,
@@ -226,6 +382,19 @@ bool parseJsonValueAsString(const std::string& text,
   if (*pos < text.size() && text[*pos] == '"')
   {
     return parseJsonString(text, pos, output, error);
+  }
+
+  if (*pos < text.size() &&
+      (text[*pos] == '{' || text[*pos] == '[' ||
+       text[*pos] == 't' || text[*pos] == 'f' || text[*pos] == 'n'))
+  {
+    const std::size_t start = *pos;
+    if (!consumeJsonValue(text, pos, error))
+    {
+      return false;
+    }
+    *output = text.substr(start, *pos - start);
+    return true;
   }
 
   return parseJsonNumberAsString(text, pos, output, error);

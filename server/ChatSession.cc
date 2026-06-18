@@ -99,6 +99,18 @@ void ChatSession::handleRequest(const JsonObject& request)
                              fieldOrEmpty(request, "limit"),
                              before);
   }
+  else if (type == "call_invite" ||
+           type == "call_accept" ||
+           type == "call_reject" ||
+           type == "call_cancel" ||
+           type == "call_hangup" ||
+           type == "call_timeout" ||
+           type == "webrtc_offer" ||
+           type == "webrtc_answer" ||
+           type == "ice_candidate")
+  {
+    server_->handleCallRequest(shared_from_this(), request);
+  }
   else
   {
     sendJson(makeErrorResponse("unknown request type"));

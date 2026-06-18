@@ -156,6 +156,45 @@ cmake --build build-qt-client
 - 第一次打开私聊或房间时会自动向服务端请求历史消息；
 - 当前打开的会话收到新消息时会自动滚动到底部。
 
+## Web 端一对一视频通话
+
+Web 客户端现在支持一对一 WebRTC 视频通话。音视频数据直接在两个浏览器之间传输，不经过 C++ 聊天服务端或 Node.js WebSocket 网关。服务端只转发：
+
+```text
+call_invite / call_accept / call_reject / call_busy
+call_cancel / call_hangup / call_timeout / call_error
+webrtc_offer / webrtc_answer / ice_candidate
+```
+
+`server/CallManager.*` 为每个非空闲用户维护 `calling`、`ringing` 或 `in_call` 状态。一次呼叫会同时占用呼叫方和被呼叫方，因此同一个用户不能同时参加两路通话，但 Alice/Bob 与 Charlie/David 可以并行建立两路互不相关的通话。WebRTC 信令只有在双方属于同一个已接受的 `call_id` 时才会被转发。
+
+本地测试：
+
+```sh
+# 终端 1
+./build/bin/chat_server
+
+# 终端 2
+cd ws-gateway
+npm ci
+npm start
+
+# 终端 3（仓库根目录）
+python3 -m http.server 8080 --directory web-client
+```
+
+打开两个 `http://localhost:8080` 标签页，在 Advanced Settings 中把 Gateway 设为 `ws://localhost:9000`，分别登录 `alice` 和 `bob`。Alice 点击 Bob 旁边的 `Video Call`，Bob 接听并允许摄像头、麦克风权限。
+
+还应测试拒接、30 秒无人接听超时、拒绝媒体权限、忙线，以及 Alice/Bob 和 Charlie/David 两路通话同时进行。
+
+生产环境注意事项：
+
+- `localhost` 通常可以直接使用摄像头和麦克风；公网页面必须使用 HTTPS。
+- HTTPS 页面必须使用 WSS 信令，现有前端会自动选择 `wss://当前域名/ws`。
+- 当前仅配置开发用 STUN：`stun:stun.l.google.com:19302`。
+- 受限 NAT 或对称 NAT 环境需要在 `web-client/webrtc.js` 的 `RTC_CONFIG` 中增加 TURN 服务和凭据。
+- 本版本不包含群组会议、SFU 或 MCU，严格保持一对一通话。
+
 ## SQLite 持久化
 
 服务端通过 `server/ChatStorage.*` 管理 SQLite，不把 SQL 分散到业务代码里。

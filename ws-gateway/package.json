@@ -1,0 +1,18 @@
+{
+  "name": "chatservice-ws-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "description": "WebSocket-to-TCP JSON-line gateway for ChatService.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "check": "node --check config.js && node --check server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "ws": "^8.18.3"
+  }
+}
+

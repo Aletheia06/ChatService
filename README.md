@@ -11,6 +11,7 @@ The server and client speak a simple line-delimited JSON protocol: each TCP mess
 - `server/ChatServer.*` integrates muduo `EventLoop` and `TcpServer`, configures the worker event-loop pool, owns connection lifecycle, and routes requests.
 - `server/ChatSession.*` stores per-connection state, including the logged-in username.
 - `server/ChatStorage.*` owns SQLite persistence, history queries, and JSON history export.
+- `server/CallManager.*` owns the mutex-protected one-to-one call state machine.
 - `server/UserManager.*` maintains the thread-safe online user map and supports one-lock connection snapshots for broadcasts.
 - `server/RoomManager.*` maintains thread-safe room membership and returns member-name snapshots.
 - `server/ServerMetrics.*` records online users, message rate, average latency, total connections, and dropped connections.
@@ -19,6 +20,9 @@ The server and client speak a simple line-delimited JSON protocol: each TCP mess
 - `common/Json.*` implements the small JSON object parser and serializer used by the wire protocol.
 - `common/Protocol.*` translates CLI commands into JSON requests and attaches client send timestamps for latency measurement.
 - `tests/` contains focused CTest checks for configuration and protocol behavior.
+- `ws-gateway/` contains a Node.js WebSocket-to-TCP gateway for browser clients.
+- `web-client/` contains a plain HTML/CSS/JavaScript browser client.
+- `web-client/webrtc.js` owns browser media capture and `RTCPeerConnection` behavior.
 
 The server binds to `chatservice::kServerHost:chatservice::kServerPort` from `common/Config.h`. Public deployments can bind the server to `0.0.0.0`; keep that separate from the Qt client's default connection host in `qt-client/src/ClientConfig.h`.
 
@@ -59,6 +63,14 @@ ChatService/
 |-- tools/
 |   `-- StressClient.cc
 |-- qt-client/
+|-- web-client/
+|   |-- app.js
+|   |-- index.html
+|   `-- style.css
+|-- ws-gateway/
+|   |-- config.js
+|   |-- package.json
+|   `-- server.js
 `-- muduo/
 ```
 
@@ -139,6 +151,147 @@ HISTORY_ROOM room [limit]
 ```
 
 You can also paste a raw JSON request that follows the protocol.
+
+## WebSocket Gateway And Web Client
+
+The browser client is an external layer around the existing C++ server. It does not change the TCP JSON-line protocol:
+
+```text
+Browser Web Client
+  -> WebSocket
+Node.js WebSocket Gateway
+  -> TCP JSON line, one JSON object followed by \n
+Existing C++/muduo chat_server
+```
+
+The gateway creates one TCP connection to the C++ server for each browser WebSocket connection. Browser messages are parsed as JSON objects, serialized back to compact JSON, and sent to the TCP server with a trailing newline. TCP responses are buffered and split by newline before each complete JSON object is forwarded to the browser, so sticky packets and partial packets are handled at the gateway boundary.
+
+By default the gateway listens on `127.0.0.1:9000` and connects to the chat server at `127.0.0.1:8888`. Override these values with environment variables:
+
+```sh
+WS_HOST=127.0.0.1 WS_PORT=9000 CHAT_TCP_HOST=127.0.0.1 CHAT_TCP_PORT=8888 npm start
+```
+
+The web client reuses the existing request and response names: `login`, `logout`, `users`, `private`, `create_room`, `join`, `leave`, `room_msg`, `history_private`, and `history_room`. The server has no room-list API, so the browser keeps joined rooms locally, just like the Qt client.
+
+When `web-client/` is served over HTTP or HTTPS, the browser login page derives its WebSocket URL from the current page host:
+
+```text
+http://chat.example.com  ->  ws://chat.example.com/ws
+https://chat.example.com ->  wss://chat.example.com/ws
+```
+
+This keeps the static frontend deployment-friendly. Do not hardcode a public server IP into the browser files. If you open `web-client/index.html` directly from disk for local testing, the fallback Gateway value is `ws://localhost:9000`.
+
+### One-to-One WebRTC Video Calls
+
+The web client supports one-to-one video calls. Audio and video do not pass
+through the C++ server or Node.js gateway:
+
+```text
+Browser A <-- WebRTC audio/video --> Browser B
+    |                                  |
+    +-- WebSocket/TCP signaling -------+
+```
+
+The C++ server forwards only call control, SDP, and ICE messages:
+
+```text
+call_invite
+call_accept
+call_reject
+call_busy
+call_cancel
+call_hangup
+call_timeout
+call_error
+webrtc_offer
+webrtc_answer
+ice_candidate
+```
+
+Every signaling request includes `to` and `call_id`. The server ignores any
+client-supplied `from` value and uses the authenticated session username.
+Examples:
+
+```json
+{"type":"call_invite","to":"bob","call_id":"550e8400-e29b-41d4-a716-446655440000","media":"video"}
+{"type":"call_accept","to":"alice","call_id":"550e8400-e29b-41d4-a716-446655440000"}
+{"type":"webrtc_offer","to":"bob","call_id":"550e8400-e29b-41d4-a716-446655440000","sdp":{"type":"offer","sdp":"..."}}
+{"type":"ice_candidate","to":"bob","call_id":"550e8400-e29b-41d4-a716-446655440000","candidate":{"candidate":"...","sdpMid":"0","sdpMLineIndex":0}}
+```
+
+`CallManager` gives each non-idle user one state:
+
+- `calling`: caller is waiting for an answer.
+- `ringing`: callee has an incoming invitation.
+- `in_call`: the invitation was accepted and WebRTC signaling is allowed.
+- `idle`: represented by no active entry.
+
+Starting a call atomically reserves both users. This allows independent pairs,
+such as Alice/Bob and Charlie/David, while preventing any user from joining two
+calls. Accept/reject/cancel/hangup operations must match the current peer and
+`call_id`. SDP and ICE forwarding is allowed only for two users in the same
+accepted call. Logout, TCP/WebSocket disconnect, and browser refresh clear the
+server state and notify the remaining peer.
+
+The browser uses a 30-second ringing timer. After acceptance, the caller sends
+the offer, the callee sends the answer, and both sides exchange ICE candidates.
+The development ICE configuration is centralized in `web-client/webrtc.js`:
+
+```js
+const RTC_CONFIG = {
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' }
+  ]
+};
+```
+
+#### Local Browser Test
+
+1. Build and start the C++ server:
+
+   ```sh
+   ./build/bin/chat_server
+   ```
+
+2. Start the WebSocket gateway:
+
+   ```sh
+   cd ws-gateway
+   npm ci
+   npm start
+   ```
+
+3. Serve the browser files instead of opening them directly:
+
+   ```sh
+   python3 -m http.server 8080 --directory web-client
+   ```
+
+4. Open `http://localhost:8080` in two tabs. In Advanced Settings set the
+   gateway to `ws://localhost:9000`, then log in as `alice` and `bob`.
+5. Click `Video Call` next to Bob, accept in Bob's tab, grant camera/microphone
+   access, verify both videos, and hang up.
+
+Also verify rejection, the 30-second timeout, denied media permission, a third
+user receiving `User is busy`, and two independent pairs calling at the same
+time. Use five tabs (`alice`, `bob`, `charlie`, `david`, `eve`) for the full
+two-call scenario.
+
+#### Production Requirements
+
+Camera and microphone APIs require a secure context. `localhost` is normally
+allowed for development, but public deployments must serve the page over
+HTTPS. When the page uses HTTPS, signaling must use WSS; the existing frontend
+selects `wss://<current-host>/ws`, and the provided Nginx configuration proxies
+that path to the loopback gateway.
+
+The public STUN server is suitable for development but does not guarantee
+connectivity through restrictive or symmetric NAT. Add a TURN service to
+`RTC_CONFIG.iceServers` before production, preferably with short-lived
+credentials. This MVP has no SFU/MCU or media relay other than a future TURN
+fallback, so it remains strictly one-to-one.
 
 ## High-Concurrency Design
 
@@ -235,6 +388,14 @@ cmake -S qt-client -B build-qt-client -DCMAKE_PREFIX_PATH=C:\Qt\6.7.0\msvc2019_6
 cmake --build build-qt-client --config Release
 ```
 
+Install the WebSocket gateway dependencies with Node.js 18 or newer:
+
+```sh
+cd ws-gateway
+npm install
+cd ..
+```
+
 ## SQLite Persistence
 
 The server stores private and room messages in SQLite through `server/ChatStorage.*`. The default database path is `chat_history.sqlite3` relative to the server process working directory.
@@ -292,13 +453,30 @@ Start the server in one terminal:
 ./build/bin/chat_server
 ```
 
-Start one or more clients in other terminals:
+Start one or more CLI clients in other terminals:
 
 ```sh
 ./build/bin/chat_client
 ```
 
 The Qt GUI client defaults to `47.109.187.23:8888` from `qt-client/src/ClientConfig.h`. The login page hides host and port by default; use Advanced Settings to override them.
+
+Start the WebSocket gateway in another terminal:
+
+```sh
+cd ws-gateway
+npm start
+```
+
+With the default configuration, the gateway listens on `ws://127.0.0.1:9000` and connects to `127.0.0.1:8888` for the C++ server. In production, Nginx exposes the gateway through `/ws`; port 9000 remains private.
+
+Open the browser client locally by opening:
+
+```text
+web-client/index.html
+```
+
+When opened from disk, the login page falls back to `ws://localhost:9000` in Advanced Settings. When served through a domain, it automatically uses the current host plus `/ws`, such as `wss://chat.example.com/ws`.
 
 Example session:
 
@@ -312,3 +490,63 @@ LOGOUT
 ```
 
 Type `/quit` or press Ctrl-D to exit the client. Disconnecting also logs the user out and removes that user from all rooms.
+
+## Production Deployment: aletheia6.top
+
+The production browser client is served from:
+
+```text
+Domain:   https://aletheia6.top
+Web root: /var/www/aletheia-chat
+Gateway:  127.0.0.1:9000
+Server:   127.0.0.1:8888 from the gateway
+```
+
+The C++ server remains available on public TCP port 8888 for the Qt desktop client. Browser traffic never connects to that raw port. Nginx serves the static files and upgrades `/ws` requests before proxying them to the loopback-only Node.js gateway:
+
+```text
+Browser -> HTTPS / WSS -> Nginx -> 127.0.0.1:9000 -> 127.0.0.1:8888
+Qt client -----------------------------------------------> public TCP :8888
+```
+
+Deployment templates are stored under `deploy/`:
+
+- `deploy/aletheia-chat.nginx` is the Nginx HTTPS server block and HTTP redirect.
+- `deploy/chat-server.service` keeps the existing C++ server running through systemd.
+- `deploy/ecosystem.config.cjs` keeps the WebSocket gateway running through PM2.
+
+Manage the C++ server:
+
+```sh
+systemctl status chat-server
+systemctl restart chat-server
+journalctl -u chat-server -n 100 --no-pager
+```
+
+Manage the WebSocket gateway:
+
+```sh
+pm2 status
+pm2 restart chat-ws-gateway
+pm2 logs chat-ws-gateway --lines 100
+pm2 save
+```
+
+Validate and reload Nginx:
+
+```sh
+nginx -t
+systemctl reload nginx
+```
+
+Test the deployment:
+
+```sh
+curl -I https://aletheia6.top/
+curl -I https://www.aletheia6.top/
+systemctl is-active chat-server nginx
+pm2 status
+ss -ltnp | grep -E ':(80|443|8888|9000)\b'
+```
+
+HTTPS is managed by Certbot's Nginx integration. Certificates cover both `aletheia6.top` and `www.aletheia6.top`, HTTP redirects to HTTPS, and the unchanged frontend automatically switches from `ws://.../ws` to `wss://.../ws`.

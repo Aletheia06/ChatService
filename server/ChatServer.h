@@ -1,6 +1,7 @@
 #ifndef CHATSERVICE_SERVER_CHATSERVER_H
 #define CHATSERVICE_SERVER_CHATSERVER_H
 
+#include "server/CallManager.h"
 #include "server/ChatSession.h"
 #include "server/RoomManager.h"
 #include "server/ServerMetrics.h"
@@ -43,6 +44,8 @@ class ChatServer
                        const std::string& room,
                        const std::string& limitText,
                        const std::string& beforeText);
+  void handleCallRequest(const ChatSessionPtr& session,
+                         const JsonObject& request);
 
  private:
   void onConnection(const muduo::net::TcpConnectionPtr& connection);
@@ -60,6 +63,7 @@ class ChatServer
   muduo::net::TcpServer server_;
   UserManager userManager_;
   RoomManager roomManager_;
+  CallManager callManager_;
   ChatStorage storage_;
   ServerMetrics metrics_;
 };

@@ -85,6 +85,18 @@ int main()
     return 1;
   }
 
+  if (!chatservice::parseJsonObject(
+          "{\"type\":\"webrtc_offer\",\"sdp\":{\"type\":\"offer\","
+          "\"sdp\":\"v=0\\r\\n\"},\"flags\":[true,false,null]}",
+          &object,
+          &error) ||
+      object["type"] != "webrtc_offer" ||
+      object["sdp"] != "{\"type\":\"offer\",\"sdp\":\"v=0\\r\\n\"}" ||
+      object["flags"] != "[true,false,null]")
+  {
+    return 1;
+  }
+
   if (!chatservice::buildRequestFromCommand(
           "HISTORY_PRIVATE bob 25", &line, &error) ||
       !parseLine(line, &object) ||
