@@ -11,6 +11,7 @@ namespace chatservice
 struct MetricsSnapshot
 {
   int64_t onlineUsers;
+  int64_t activeRooms;
   int64_t intervalMessages;
   int64_t totalMessages;
   int64_t totalConnections;
@@ -29,6 +30,7 @@ class ServerMetrics
   void recordMessage(int64_t latencyMicros);
 
   MetricsSnapshot snapshotAndReset(int64_t onlineUsers,
+                                   int64_t activeRooms,
                                    double intervalSeconds);
 
  private:

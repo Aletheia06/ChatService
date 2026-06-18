@@ -101,6 +101,23 @@ void RoomManager::leaveAll(const std::string& username)
   userRooms_.erase(userIt);
 }
 
+int64_t RoomManager::roomCount() const
+{
+  muduo::MutexLockGuard lock(mutex_);
+  int64_t activeRooms = 0;
+  for (std::map<std::string, std::set<std::string> >::const_iterator it =
+           rooms_.begin();
+       it != rooms_.end();
+       ++it)
+  {
+    if (!it->second.empty())
+    {
+      ++activeRooms;
+    }
+  }
+  return activeRooms;
+}
+
 bool RoomManager::membersForMessage(const std::string& room,
                                     const std::string& username,
                                     std::vector<std::string>* members,

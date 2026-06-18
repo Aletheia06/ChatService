@@ -3,6 +3,7 @@
 
 #include "muduo/base/Mutex.h"
 
+#include <stdint.h>
 #include <map>
 #include <set>
 #include <string>
@@ -22,6 +23,7 @@ class RoomManager
                  const std::string& username,
                  std::string* error);
   void leaveAll(const std::string& username);
+  int64_t roomCount() const;
   bool membersForMessage(const std::string& room,
                          const std::string& username,
                          std::vector<std::string>* members,

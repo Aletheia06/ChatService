@@ -30,6 +30,9 @@ muduo/patches/
 *.pdb
 chatservice.*.log
 stress_results*.csv
+stress-test/results/
+__pycache__/
+*.py[cod]
 
 # Editor and OS files
 .idea/

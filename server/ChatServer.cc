@@ -600,10 +600,12 @@ void ChatServer::printPerformanceStats()
 {
   const MetricsSnapshot snapshot =
       metrics_.snapshotAndReset(userManager_.onlineCount(),
+                                roomManager_.roomCount(),
                                 kMetricsIntervalSeconds);
 
   std::ostringstream stream;
   stream << "stats online_users=" << snapshot.onlineUsers
+         << " active_rooms=" << snapshot.activeRooms
          << " messages_per_second=" << snapshot.messagesPerSecond
          << " average_latency_us=" << snapshot.averageLatencyMicros
          << " total_messages=" << snapshot.totalMessages

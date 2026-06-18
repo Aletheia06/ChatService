@@ -37,10 +37,12 @@ void ServerMetrics::recordMessage(int64_t latencyMicros)
 }
 
 MetricsSnapshot ServerMetrics::snapshotAndReset(int64_t onlineUsers,
+                                                int64_t activeRooms,
                                                 double intervalSeconds)
 {
   MetricsSnapshot snapshot;
   snapshot.onlineUsers = onlineUsers;
+  snapshot.activeRooms = activeRooms;
   snapshot.intervalMessages = intervalMessages_.getAndSet(0);
   snapshot.totalMessages = totalMessages_.get();
   snapshot.totalConnections = totalConnections_.get();
